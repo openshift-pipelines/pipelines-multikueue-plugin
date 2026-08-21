@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/openshift-pipelines/pipelines-kueue-addon/internal/common"
+	"github.com/openshift-pipelines/pipelines-multikueue-plugin/internal/common"
 	v1 "github.com/openshift/api/operator/v1"
 	kueuev1 "github.com/openshift/kueue-operator/pkg/apis/kueueoperator/v1"
 	corev1 "k8s.io/api/core/v1"

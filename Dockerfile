@@ -15,10 +15,10 @@ COPY . .
 # Build with or without coverage instrumentation
 RUN if [ "$ENABLE_COVERAGE" = "true" ]; then \
         echo "Building with coverage instrumentation..."; \
-        CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -cover -covermode=atomic -tags=coverage -o controller ./cmd/; \
+        CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -cover -covermode=atomic -tags=coverage -o controller ./cmd/; \
     else \
         echo "Building production binary..."; \
-        CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o controller ./cmd/; \
+        CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -a -o controller ./cmd/; \
     fi
 
 

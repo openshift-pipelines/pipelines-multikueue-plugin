@@ -5,7 +5,7 @@ import (
 	"os"
 	"reflect"
 
-	"github.com/openshift-pipelines/pipelines-kueue-addon/internal/reconcilers"
+	"github.com/openshift-pipelines/pipelines-multikueue-plugin/internal/reconcilers"
 	// Kubernetes core schemes
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"

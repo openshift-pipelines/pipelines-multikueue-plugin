@@ -1,4 +1,4 @@
-module github.com/openshift-pipelines/pipelines-kueue-addon
+module github.com/openshift-pipelines/pipelines-multikueue-plugin
 
 go 1.26.5
 

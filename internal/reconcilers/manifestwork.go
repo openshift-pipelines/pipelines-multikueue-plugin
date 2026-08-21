@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/openshift-pipelines/pipelines-kueue-addon/internal/manifest"
+	"github.com/openshift-pipelines/pipelines-multikueue-plugin/internal/manifest"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
