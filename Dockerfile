@@ -29,10 +29,16 @@ COPY LICENSE /licenses/
 USER 65532:65532
 
 # It is mandatory to set these labels
-LABEL name="Pipelines MultiKueue Addon"
-LABEL description="Pipelines MultiKueue Addon"
-LABEL com.redhat.component="Pipelines MultiKueue Addon"
-LABEL io.k8s.description="Pipelines MultiKueue Addon"
-LABEL io.k8s.display-name="Pipelines MultiKueue Addon"
+LABEL \
+    com.redhat.component="openshift-controller-rhel9-container" \
+    cpe="cpe:/a:redhat:openshift_pipelines:0.1::" \
+    description="Red Hat OpenShift Pipelines pipelines-multikueue-plugin controller" \
+    io.k8s.description="Red Hat OpenShift Pipelines pipelines-multikueue-plugin controller" \
+    io.k8s.display-name="Red Hat OpenShift Pipelines pipelines-multikueue-plugin controller" \
+    io.openshift.tags="tekton,openshift,pipelines-multikueue-plugin,controller" \
+    maintainer="pipelines-extcomm@redhat.com" \
+    name="openshift-pipelines/controller-rhel9" \
+    summary="Red Hat OpenShift Pipelines pipelines-multikueue-plugin controller" \
+    version="v0.1.1"
 
 ENTRYPOINT ["/controller"]
