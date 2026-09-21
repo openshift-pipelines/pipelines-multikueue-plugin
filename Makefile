@@ -1,6 +1,6 @@
 # Image URL to use all building/pushing image targets
 VERSION ?= nightly
-IMG ?= quay.io/openshift-pipeline/pipelines-multikueue-controller:${VERSION}
+IMG ?= ${KO_DOCKER_REPO}/pipelines-multikueue-controller:${VERSION}
 KIND_CLUSTER ?= kind
 RELEASE_DIR ?= release
 

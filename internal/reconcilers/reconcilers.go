@@ -106,7 +106,6 @@ func (r *MultiKueueReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 	// If managed cluster is local cluster then   return
-
 	if label, ok := managedCluster.Labels["local-cluster"]; ok && label == "true" {
 		logger.Info("Skipping Local Cluster", "Namespace", req.Namespace, "Name", req.Name)
 		return ctrl.Result{}, nil

@@ -6,7 +6,7 @@ namePrefix: pipelines-multikueue-plugin-
 images:
 - name: controller
   newName: quay.io/prbindal/pipelines-multikueue-controller
-  newTag: "4"
+  newTag: "34"
 resources:
 - multikueue-controller.yaml
 - rbac/service_account.yaml
