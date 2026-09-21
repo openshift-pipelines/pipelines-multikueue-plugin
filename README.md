@@ -4,6 +4,46 @@ Pipelines MultiKueue Plugin configures an OpenShift hub and its managed clusters
 
 The controller is intended to run on an Open Cluster Management hub. It watches non-local `ManagedCluster` resources and connects each eligible cluster to Kueue MultiKueue.
 
+## Architecture
+
+The plugin bootstraps the MultiKueue connection; Kueue then dispatches queued `PipelineRuns` and returns their status to the hub.
+
+```mermaid
+flowchart LR
+  User["User / CI"]
+
+  subgraph Hub["OpenShift hub"]
+    PR["PipelineRun<br/>queue: pipelines-kueue"]
+    HubKueue["Kueue / MultiKueue"]
+    Plugin["Pipelines MultiKueue Plugin"]
+    OCM["OCM APIs<br/>ManagedCluster, MSA, ManifestWork"]
+    Connection["MultiKueueCluster<br/>and kubeconfig Secret"]
+
+    Plugin -->|"watches and reconciles"| OCM
+    Plugin -->|"creates"| Connection
+    Connection -->|"registers worker"| HubKueue
+    PR -->|"queued"| HubKueue
+  end
+
+  subgraph Worker["Managed OpenShift cluster"]
+    Setup["Operators and Kueue configuration"]
+    WorkerKueue["Worker Kueue"]
+    RemotePR["Remote PipelineRun"]
+    Tekton["OpenShift Pipelines"]
+
+    Setup --> WorkerKueue
+    Setup --> Tekton
+    WorkerKueue -->|"admits"| RemotePR
+    Tekton -->|"executes"| RemotePR
+  end
+
+  User -->|"submits"| PR
+  OCM -->|"credentials and RBAC"| Setup
+  Plugin -->|"bootstraps through MSA"| Setup
+  HubKueue ==>|"dispatches"| RemotePR
+  RemotePR -.->|"syncs status"| PR
+```
+
 ## What the controller does
 
 On the hub, the controller:
