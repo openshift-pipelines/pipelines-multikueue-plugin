@@ -65,7 +65,7 @@ func (r *ClusterBootstrap) ensureKueue(ctx context.Context) error {
 		if kueue.Spec.Config.MultiKueue == nil {
 			kueue.Spec.Config.MultiKueue = &kueuev1.MultiKueue{}
 		}
-		kueue.Spec.Config.MultiKueue.ExternalFrameworks = ensureExternalFramework(kueue.Spec.Config.Integrations.ExternalFrameworks, tektonFramework)
+		kueue.Spec.Config.MultiKueue.ExternalFrameworks = ensureExternalFramework(kueue.Spec.Config.MultiKueue.ExternalFrameworks, tektonFramework)
 
 		return r.Patch(ctx, kueue, patch)
 	}
@@ -156,7 +156,7 @@ func (r *ClusterBootstrap) ensureClusterQueue(ctx context.Context) error {
 			logger.Info("Create AdmissionChecksStrategy", "ClusterQueue", cq.Name)
 			cq.Spec.NamespaceSelector = &metav1.LabelSelector{}
 		}
-		
+
 		// ensurePipelineRunResourceGroup
 		ensurePipelineRunResourceGroup(cq, DefaultResourceFlavor, resource.MustParse("100"))
 
