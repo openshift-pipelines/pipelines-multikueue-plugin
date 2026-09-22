@@ -308,11 +308,11 @@ func TestEnsureKueuePatchesExisting(t *testing.T) {
 	}
 
 	// The pre-existing batch/job integration must survive the patch.
-	assert.Equal(t, len(kueue.Spec.Config.Integrations.Frameworks), 1)
+	assert.Equal(t, 1, len(kueue.Spec.Config.Integrations.Frameworks))
 
-	assert.Equal(t, len(kueue.Spec.Config.Integrations.ExternalFrameworks), 2)
-	assert.Equal(t, kueue.Spec.Config.Integrations.ExternalFrameworks[0], dummyIntegrationFramework)
-	assert.Equal(t, kueue.Spec.Config.Integrations.ExternalFrameworks[1], tektonFramework)
+	assert.Equal(t, 2, len(kueue.Spec.Config.Integrations.ExternalFrameworks))
+	assert.Equal(t, dummyIntegrationFramework, kueue.Spec.Config.Integrations.ExternalFrameworks[0])
+	assert.Equal(t, tektonFramework, kueue.Spec.Config.Integrations.ExternalFrameworks[1])
 	assert.NotNil(t, kueue.Spec.Config.MultiKueue)
 	assert.Equal(t, len(kueue.Spec.Config.MultiKueue.ExternalFrameworks), 2)
 	assert.Equal(t, kueue.Spec.Config.MultiKueue.ExternalFrameworks[0], dummyMultiKueueFramework)
