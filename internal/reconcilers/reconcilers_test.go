@@ -71,10 +71,9 @@ func TestSecretToManagedCluster(t *testing.T) {
 	msaAPIVersion := msav1beta1.GroupVersion.String()
 
 	tests := []struct {
-		name   string
-		obj    client.Object
-		want   []reconcile.Request
-		reason string
+		name string
+		obj  client.Object
+		want []reconcile.Request
 	}{
 		{
 			name: "secret owned by the multikueue MSA maps to its namespace",
