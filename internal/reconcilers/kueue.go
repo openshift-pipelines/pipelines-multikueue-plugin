@@ -57,7 +57,7 @@ func (r *ClusterBootstrap) ensureKueue(ctx context.Context) error {
 	// 1. Try to get the Kueue
 	err := r.Get(ctx, key, kueue)
 	if err == nil {
-		klog.V(4).Infof("Namespace %s already exists.", kueueName)
+		klog.V(4).Infof("Kueue %s already exists.", kueueName)
 		patch := client.MergeFrom(kueue.DeepCopy())
 		//If KueueCR  Allready Exists then Patch.
 		kueue.Spec.Config.Integrations.ExternalFrameworks = ensureExternalFramework(kueue.Spec.Config.Integrations.ExternalFrameworks, tektonFramework)
