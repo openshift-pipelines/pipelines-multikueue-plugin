@@ -177,7 +177,7 @@ func TestEnsureOperatorAdoptsExistingSubscription(t *testing.T) {
 }
 
 func TestEnsureOperatorCreatesSubscription(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
 	b := &ClusterBootstrap{Client: newFakeClient(t)}

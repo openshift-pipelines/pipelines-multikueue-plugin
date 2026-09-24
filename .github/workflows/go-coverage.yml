@@ -42,7 +42,7 @@ jobs:
 
       - name: Generate coverage
         run: |
-          go test -cover -coverprofile=coverage.txt ./... 
+          go test -cover -coverprofile=coverage.txt ./...
           echo "Generated coverage profile"
 
       - name: Archive coverage results

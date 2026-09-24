@@ -206,15 +206,16 @@ jobs:
         run: |
           set -euo pipefail
           asset="release/release-${VERSION}.yaml"
+          target_sha="$(git rev-parse HEAD)"
 
           if [[ "${KIND}" == "nightly" ]]; then
             # nightly is a moving tag: drop the previous one and re-cut it here.
             gh release delete "${TAG}" --cleanup-tag --yes || true
             gh release create "${TAG}" \
-              --target "${GITHUB_SHA}" \
+              --target "${target_sha}" \
               --title "${TAG}" \
               --prerelease \
-              --notes "Nightly build of \`main\` at ${GITHUB_SHA}.
+              --notes "Nightly build of \`main\` at ${target_sha}.
 
           Image: \`${IMG}\`" \
               "${asset}#release-${VERSION}.yaml"
@@ -224,7 +225,7 @@ jobs:
               exit 1
             fi
             gh release create "${TAG}" \
-              --target "${GITHUB_SHA}" \
+              --target "${target_sha}" \
               --title "${TAG}" \
               --generate-notes \
               "${asset}#release-${VERSION}.yaml"
