@@ -13,7 +13,7 @@ flowchart LR
   User["User / CI"]
 
   subgraph Hub["OpenShift hub"]
-    PR["PipelineRun<br/>queue: pipelines-kueue"]
+    PR["PipelineRun<br/>queue: pipelines-queue"]
     HubKueue["Kueue / MultiKueue"]
     Plugin["Pipelines MultiKueue Plugin"]
     OCM["OCM APIs<br/>ManagedCluster, MSA, ManifestWork"]
@@ -121,7 +121,7 @@ kubectl get multikueueclusters.kueue.x-k8s.io
 kubectl get multikueueconfigs.kueue.x-k8s.io pipelines-multikueue-config
 kubectl get clusterqueues.kueue.x-k8s.io pipelines-multicluster-kueue
 kubectl get admissionchecks.kueue.x-k8s.io pipelines-multikueue-ac
-kubectl get localqueues.kueue.x-k8s.io pipelines-kueue -n default
+kubectl get localqueues.kueue.x-k8s.io pipelines-queue -n default
 ```
 
 ## Submit a PipelineRun
@@ -135,7 +135,7 @@ metadata:
   generateName: multikueue-
   namespace: default
   labels:
-    kueue.x-k8s.io/queue-name: pipelines-kueue
+    kueue.x-k8s.io/queue-name: pipelines-queue
 spec:
   # Add pipelineRef or pipelineSpec here.
 ```
@@ -144,18 +144,18 @@ Create a `LocalQueue` pointing to `pipelines-multicluster-kueue` before submitti
 
 ## Defaults
 
-| Setting | Default |
-| --- | --- |
-| OpenShift Pipelines channel | `pipelines-1.22` |
-| Kueue Operator channel | `stable-v1.4` |
-| cert-manager Operator channel | `stable-v1` |
-| Kueue namespace | `openshift-kueue-operator` |
-| Resource flavor | `default-flavor` |
-| Cluster queue | `pipelines-multicluster-kueue` |
-| Local queue | `pipelines-kueue` in `default` |
-| Admission check | `pipelines-multikueue-ac` |
-| MultiKueue config | `pipelines-multikueue-config` |
-| PipelineRun quota | `100` |
+| Setting | Default                                  |
+| --- |------------------------------------------|
+| OpenShift Pipelines channel | `latest`                                 |
+| Kueue Operator channel | `stable-v1.4`                            |
+| cert-manager Operator channel | `stable-v1`                              |
+| Kueue namespace | `openshift-kueue-operator`               |
+| Resource flavor | `default-flavor`                         |
+| Cluster queue | `pipelines-multicluster-kueue`           |
+| Local queue | `pipelines-queue` in `default` namespace |
+| Admission check | `pipelines-multikueue-ac`                |
+| MultiKueue config | `pipelines-multikueue-config`            |
+| PipelineRun quota | `100`                                    |
 
 Set `KUEUE_NAMESPACE` on the controller Deployment to use a different namespace for MultiKueue kubeconfig Secrets.
 
