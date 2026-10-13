@@ -155,7 +155,7 @@ jobs:
           release_ref="ghcr.io/${owner}/${IMAGE_NAME}:${{ matrix.target.version }}"
           build_ref="${release_ref}"
           if [[ "${{ matrix.target.kind }}" == "nightly" ]]; then
-            build_ref="ghcr.io/${owner}/${IMAGE_NAME}:nightly-$(git rev-parse HEAD)"
+            build_ref="ghcr.io/${owner}/${IMAGE_NAME}:nightly-$(git rev-parse HEAD)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           fi
           echo "build_ref=${build_ref}" >> "${GITHUB_OUTPUT}"
           echo "release_ref=${release_ref}" >> "${GITHUB_OUTPUT}"
