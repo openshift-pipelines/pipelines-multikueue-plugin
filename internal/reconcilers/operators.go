@@ -72,7 +72,7 @@ func (r *ClusterBootstrap) ensureOperators(ctx context.Context) error {
 	logger.Info("Installing Operators")
 
 	// Ensure Pipelines Operator
-	if err := r.ensureOperator(ctx, "openshift-pipelines-operator-rh", "pipelines-1.22", "openshift-operators"); err != nil {
+	if err := r.ensureOperator(ctx, "openshift-pipelines-operator-rh", "latest", "openshift-operators"); err != nil {
 		return err
 	}
 
