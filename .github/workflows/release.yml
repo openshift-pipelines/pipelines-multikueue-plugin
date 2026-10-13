@@ -1,0 +1,234 @@
+name: Release
+
+permissions:
+  contents: write
+  packages: write
+
+on:
+  # main is released daily as `nightly`.
+  # Release branches are batched: any push during the week is picked up by the
+  # Friday run, which cuts the next patch release.
+  schedule:
+    - cron: '0 2 * * *'
+    - cron: '30 3 * * 5'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Release even if the branch has no new commits since its last tag"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  IMAGE_NAME: pipelines-multikueue-controller
+  PLATFORMS: linux/amd64
+  DAILY_CRON: '0 2 * * *'
+  WEEKLY_CRON: '30 3 * * 5'
+
+jobs:
+  # Works out what to release. Scheduled runs only ever execute on the default
+  # branch, so the Friday run has to discover the release branches itself rather
+  # than relying on the ref it was triggered on.
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Plan releases
+        id: plan
+        env:
+          FORCE: ${{ inputs.force }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+
+          git fetch --quiet --force --tags origin '+refs/heads/*:refs/remotes/origin/*'
+
+          # Highest existing patch number for a vX.Y series, empty if none.
+          latest_patch() {
+            git tag --list "release-$1.*" \
+              | sed -n "s/^release-$1\.\([0-9][0-9]*\)$/\1/p" \
+              | sort -n \
+              | tail -1
+          }
+
+          # Emit a JSON target for a release-vX.Y.x branch, or nothing if the
+          # branch has no new commits since its last tag.
+          plan_release_branch() {
+            local branch="$1" series previous tag patch
+            series="$(echo "${branch}" | sed -n 's/^release-\(v[0-9][0-9]*\.[0-9][0-9]*\)\.x$/\1/p')"
+            if [[ -z "${series}" ]]; then
+              echo "  skip ${branch}: does not match release-v<major>.<minor>.x" >&2
+              return 0
+            fi
+
+            previous="$(latest_patch "${series}")"
+            if [[ -z "${previous}" ]]; then
+              patch=0
+            else
+              tag="release-${series}.${previous}"
+              if [[ "${FORCE}" != "true" ]] \
+                && [[ "$(git rev-list --count "${tag}..origin/${branch}")" -eq 0 ]]; then
+                echo "  skip ${branch}: no commits since ${tag}" >&2
+                return 0
+              fi
+              patch=$(( previous + 1 ))
+            fi
+
+            jq -nc \
+              --arg ref "${branch}" \
+              --arg version "${series}.${patch}" \
+              --arg tag "release-${series}.${patch}" \
+              '{ref: $ref, version: $version, tag: $tag, kind: "release"}'
+          }
+
+          nightly_target() {
+            jq -nc '{ref: "main", version: "nightly", tag: "nightly", kind: "nightly"}'
+          }
+
+          {
+            if [[ "${GITHUB_EVENT_NAME}" == "schedule" && "${SCHEDULE}" == "${WEEKLY_CRON}" ]]; then
+              echo "Friday run: scanning release branches" >&2
+              git for-each-ref --format='%(refname:strip=3)' 'refs/remotes/origin/release-v*.x' \
+                | while read -r branch; do
+                    plan_release_branch "${branch}"
+                  done
+            elif [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+              echo "Daily run: nightly from main" >&2
+              nightly_target
+            elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+              echo "Manual run on main: nightly" >&2
+              nightly_target
+            else
+              echo "Manual run on ${GITHUB_REF_NAME}" >&2
+              plan_release_branch "${GITHUB_REF_NAME}"
+            fi
+          } | jq -sc . > targets.json
+
+          echo "targets=$(cat targets.json)" >> "${GITHUB_OUTPUT}"
+          jq . targets.json
+
+  release:
+    name: Release ${{ matrix.target.tag }}
+    needs: plan
+    if: needs.plan.outputs.targets != '[]'
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+
+    steps:
+      - name: Checkout ${{ matrix.target.ref }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ matrix.target.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: "go.mod"
+
+      - name: Resolve image reference
+        id: image
+        run: |
+          set -euo pipefail
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "ref=ghcr.io/${owner}/${IMAGE_NAME}:${{ matrix.target.version }}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca  # v3.9.0
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Build and push image
+        env:
+          IMG: ${{ steps.image.outputs.ref }}
+        run: |
+          make build IMG="${IMG}" PLATFORMS="${PLATFORMS}"
+
+      # `make build` prefixes its buildx line with `-`, so make ignores a failed
+      # build or push. Inspect the registry so this job fails when nothing landed.
+      - name: Verify image was pushed
+        env:
+          IMG: ${{ steps.image.outputs.ref }}
+        run: |
+          docker buildx imagetools inspect "${IMG}"
+
+      - name: Generate release manifest
+        env:
+          IMG: ${{ steps.image.outputs.ref }}
+          VERSION: ${{ matrix.target.version }}
+        run: |
+          make release IMG="${IMG}" VERSION="${VERSION}"
+          ls -l "release/release-${VERSION}.yaml"
+
+      - name: Archive release manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: release-${{ matrix.target.version }}
+          path: release/release-${{ matrix.target.version }}.yaml
+
+      # Tag only after the image and the manifest are known good, so a failed
+      # build never leaves a dangling release tag behind.
+      - name: Publish release ${{ matrix.target.tag }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ matrix.target.tag }}
+          VERSION: ${{ matrix.target.version }}
+          KIND: ${{ matrix.target.kind }}
+          IMG: ${{ steps.image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          asset="release/release-${VERSION}.yaml"
+          target_sha="$(git rev-parse HEAD)"
+
+          if [[ "${KIND}" == "nightly" ]]; then
+            # nightly is a moving tag: drop the previous one and re-cut it here.
+            gh release delete "${TAG}" --cleanup-tag --yes || true
+            gh release create "${TAG}" \
+              --target "${target_sha}" \
+              --title "${TAG}" \
+              --prerelease \
+              --notes "Nightly build of \`main\` at ${target_sha}.
+
+          Image: \`${IMG}\`" \
+              "${asset}#release-${VERSION}.yaml"
+          else
+            if gh release view "${TAG}" >/dev/null 2>&1; then
+              echo "::error::Release ${TAG} already exists."
+              exit 1
+            fi
+            gh release create "${TAG}" \
+              --target "${target_sha}" \
+              --title "${TAG}" \
+              --generate-notes \
+              "${asset}#release-${VERSION}.yaml"
+          fi
+
+          echo "Published ${TAG} with image ${IMG}"
