@@ -147,12 +147,18 @@ jobs:
         with:
           go-version-file: "go.mod"
 
-      - name: Resolve image reference
+      - name: Resolve image references
         id: image
         run: |
           set -euo pipefail
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          echo "ref=ghcr.io/${owner}/${IMAGE_NAME}:${{ matrix.target.version }}" >> "${GITHUB_OUTPUT}"
+          release_ref="ghcr.io/${owner}/${IMAGE_NAME}:${{ matrix.target.version }}"
+          build_ref="${release_ref}"
+          if [[ "${{ matrix.target.kind }}" == "nightly" ]]; then
+            build_ref="ghcr.io/${owner}/${IMAGE_NAME}:nightly-$(git rev-parse HEAD)"
+          fi
+          echo "build_ref=${build_ref}" >> "${GITHUB_OUTPUT}"
+          echo "release_ref=${release_ref}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
@@ -168,7 +174,7 @@ jobs:
 
       - name: Build and push image
         env:
-          IMG: ${{ steps.image.outputs.ref }}
+          IMG: ${{ steps.image.outputs.build_ref }}
         run: |
           make build IMG="${IMG}" PLATFORMS="${PLATFORMS}"
 
@@ -176,13 +182,21 @@ jobs:
       # build or push. Inspect the registry so this job fails when nothing landed.
       - name: Verify image was pushed
         env:
-          IMG: ${{ steps.image.outputs.ref }}
+          IMG: ${{ steps.image.outputs.build_ref }}
         run: |
           docker buildx imagetools inspect "${IMG}"
 
+      - name: Promote nightly image
+        if: matrix.target.kind == 'nightly'
+        env:
+          SOURCE_IMG: ${{ steps.image.outputs.build_ref }}
+          TARGET_IMG: ${{ steps.image.outputs.release_ref }}
+        run: |
+          docker buildx imagetools create --tag "${TARGET_IMG}" "${SOURCE_IMG}"
+
       - name: Generate release manifest
         env:
-          IMG: ${{ steps.image.outputs.ref }}
+          IMG: ${{ steps.image.outputs.release_ref }}
           VERSION: ${{ matrix.target.version }}
         run: |
           make release IMG="${IMG}" VERSION="${VERSION}"
@@ -202,7 +216,7 @@ jobs:
           TAG: ${{ matrix.target.tag }}
           VERSION: ${{ matrix.target.version }}
           KIND: ${{ matrix.target.kind }}
-          IMG: ${{ steps.image.outputs.ref }}
+          IMG: ${{ steps.image.outputs.release_ref }}
         run: |
           set -euo pipefail
           asset="release/release-${VERSION}.yaml"
