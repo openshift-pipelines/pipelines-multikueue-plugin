@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/openshift-pipelines/pipelines-multikueue-plugin/internal/reconcilers"
+	tektonoperator "github.com/tektoncd/operator/pkg/apis/operator/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -51,6 +52,11 @@ func TestSchemeRegistersRequiredTypes(t *testing.T) {
 		if !scheme.Recognizes(rbacv1.SchemeGroupVersion.WithKind(kind)) {
 			t.Errorf("rbac/v1 %s is not registered in the scheme", kind)
 		}
+	}
+	// The spoke client is built from this scheme, so the Tekton operator types
+	// have to be here for ClusterBootstrap to read and patch the TektonConfig.
+	if !scheme.Recognizes(tektonoperator.SchemeGroupVersion.WithKind("TektonConfig")) {
+		t.Error("operator.tekton.dev/v1alpha1 TektonConfig is not registered in the scheme")
 	}
 }
 

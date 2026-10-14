@@ -7,11 +7,14 @@ import (
 	"github.com/openshift-pipelines/pipelines-multikueue-plugin/internal/common"
 	kueuev1 "github.com/openshift/kueue-operator/pkg/apis/kueueoperator/v1"
 	"github.com/stretchr/testify/assert"
+	tektonoperator "github.com/tektoncd/operator/pkg/apis/operator/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
+	"knative.dev/pkg/ptr"
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 )
 
@@ -624,5 +627,94 @@ func TestEnsureKubeConfigSecretUpdatesExisting(t *testing.T) {
 	}
 	if target.Labels["multikueue.kueue.x-k8s.io/managed-cluster"] != "cluster-cluster1" {
 		t.Error("managed-cluster label was not applied to the existing secret")
+	}
+}
+
+// enableKueueInTektonConfig flips the TektonScheduler on so Kueue can admit
+// PipelineRuns. It only ever runs against the singleton TektonConfig named
+// "config" on a spoke cluster.
+
+func TestEnableKueueInTektonConfigEnablesScheduler(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		disabled *bool
+	}{
+		{"scheduler explicitly disabled", ptr.Bool(true)},
+		{"scheduler field unset", nil},
+		{"scheduler already enabled", ptr.Bool(false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			r := &ClusterBootstrap{Client: newFakeClient(t, newTektonConfig(TektonConfigName, tc.disabled))}
+
+			if err := r.enableKueueInTektonConfig(ctx); err != nil {
+				t.Fatalf("enableKueueInTektonConfig() error = %v", err)
+			}
+
+			got := &tektonoperator.TektonConfig{}
+			if err := r.Get(ctx, types.NamespacedName{Name: TektonConfigName}, got); err != nil {
+				t.Fatalf("TektonConfig was not readable after patch: %v", err)
+			}
+			if got.Spec.Scheduler.Disabled == nil {
+				t.Fatal("scheduler disabled = nil, want a non-nil false")
+			}
+			if *got.Spec.Scheduler.Disabled {
+				t.Error("scheduler disabled = true, want false")
+			}
+		})
+	}
+}
+
+// Calling it twice must not error or flip the field back.
+func TestEnableKueueInTektonConfigIsIdempotent(t *testing.T) {
+	ctx := t.Context()
+	r := &ClusterBootstrap{Client: newFakeClient(t, newTektonConfig(TektonConfigName, ptr.Bool(true)))}
+
+	for i := range 2 {
+		if err := r.enableKueueInTektonConfig(ctx); err != nil {
+			t.Fatalf("enableKueueInTektonConfig() call %d error = %v", i+1, err)
+		}
+	}
+
+	got := &tektonoperator.TektonConfig{}
+	if err := r.Get(ctx, types.NamespacedName{Name: TektonConfigName}, got); err != nil {
+		t.Fatalf("TektonConfig was not readable: %v", err)
+	}
+	assert.NotNil(t, got.Spec.Scheduler.Disabled)
+	assert.False(t, *got.Spec.Scheduler.Disabled)
+}
+
+// With no TektonConfig present the Get error is returned verbatim, which
+// propagates out of bootstrap and fails the spoke rollout.
+func TestEnableKueueInTektonConfigMissingConfig(t *testing.T) {
+	ctx := t.Context()
+	r := &ClusterBootstrap{Client: newFakeClient(t)}
+
+	err := r.enableKueueInTektonConfig(ctx)
+	if err == nil {
+		t.Fatal("enableKueueInTektonConfig() error = nil, want NotFound")
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("error = %v, want a NotFound error", err)
+	}
+}
+
+// Only the singleton named "config" is touched; a differently named
+// TektonConfig is neither read nor patched.
+func TestEnableKueueInTektonConfigIgnoresOtherNames(t *testing.T) {
+	ctx := t.Context()
+	other := newTektonConfig("not-config", ptr.Bool(true))
+	r := &ClusterBootstrap{Client: newFakeClient(t, other)}
+
+	if err := r.enableKueueInTektonConfig(ctx); !apierrors.IsNotFound(err) {
+		t.Fatalf("enableKueueInTektonConfig() error = %v, want NotFound", err)
+	}
+
+	got := &tektonoperator.TektonConfig{}
+	if err := r.Get(ctx, types.NamespacedName{Name: "not-config"}, got); err != nil {
+		t.Fatalf("unrelated TektonConfig was not readable: %v", err)
+	}
+	if got.Spec.Scheduler.Disabled == nil || !*got.Spec.Scheduler.Disabled {
+		t.Error("unrelated TektonConfig scheduler was modified, want it left disabled")
 	}
 }

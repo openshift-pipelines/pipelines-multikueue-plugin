@@ -9,6 +9,7 @@ import (
 	"github.com/openshift-pipelines/pipelines-multikueue-plugin/internal/common"
 	v1 "github.com/openshift/api/operator/v1"
 	kueuev1 "github.com/openshift/kueue-operator/pkg/apis/kueueoperator/v1"
+	tektonoperator "github.com/tektoncd/operator/pkg/apis/operator/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +18,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/klog/v2"
+	"knative.dev/pkg/ptr"
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -31,6 +33,8 @@ const (
 	DefaultLocalQueue         = "pipelines-queue"
 	DefaultResourceFlavor     = "default-flavor"
 	PipelineResourceName      = "tekton.dev/pipelineruns"
+	ClusterRoleSpoke          = "Spoke"
+	TektonConfigName          = "config"
 )
 
 // +kubebuilder:rbac:groups="kueue.openshift.io",resources=kueues,verbs=get;list;create;patch;update;watch
@@ -97,6 +101,25 @@ func (r *ClusterBootstrap) ensureKueue(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (r *ClusterBootstrap) enableKueueInTektonConfig(ctx context.Context) error {
+	logger := log.FromContext(ctx).WithName("enableKueueInTektonConfig")
+
+	// Get TektonConfig
+	tektonConfig := &tektonoperator.TektonConfig{}
+	key := types.NamespacedName{Name: TektonConfigName}
+	logger.Info("Enabling Kueue on Spoke")
+
+	// 1. Try to get the TektonConfig
+	err := r.Get(ctx, key, tektonConfig)
+	if err == nil {
+		logger.Info("Found TektonConfig", "name", tektonConfig.Name)
+		patch := client.MergeFrom(tektonConfig.DeepCopy())
+		tektonConfig.Spec.Scheduler.Disabled = ptr.Bool(false)
+		return r.Patch(ctx, tektonConfig, patch)
+	}
+	return err
 }
 
 func ensureExternalFramework(frameworks []kueuev1.ExternalFramework, framework kueuev1.ExternalFramework) []kueuev1.ExternalFramework {

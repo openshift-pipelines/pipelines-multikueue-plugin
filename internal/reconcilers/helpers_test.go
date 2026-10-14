@@ -6,6 +6,7 @@ import (
 	kueuev1 "github.com/openshift/kueue-operator/pkg/apis/kueueoperator/v1"
 	operatorsv1 "github.com/operator-framework/api/pkg/operators/v1"
 	olm "github.com/operator-framework/api/pkg/operators/v1alpha1"
+	tektonoperator "github.com/tektoncd/operator/pkg/apis/operator/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,6 +35,7 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 		"msa":           msav1beta1.AddToScheme,
 		"olm":           olm.AddToScheme,
 		"operators":     operatorsv1.AddToScheme,
+		"tekton":        tektonoperator.AddToScheme,
 	} {
 		if err := add(s); err != nil {
 			t.Fatalf("failed to add %s types to scheme: %v", name, err)
@@ -56,6 +58,18 @@ func newSecret(namespace, name string, data map[string][]byte) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
 		Data:       data,
+	}
+}
+
+// newTektonConfig returns a TektonConfig whose scheduler is in the given
+// state. A nil disabled means the field is absent, which is how a cluster
+// that has never had the scheduler configured looks.
+func newTektonConfig(name string, disabled *bool) *tektonoperator.TektonConfig {
+	return &tektonoperator.TektonConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: tektonoperator.TektonConfigSpec{
+			Scheduler: tektonoperator.Scheduler{Disabled: disabled},
+		},
 	}
 }
 
