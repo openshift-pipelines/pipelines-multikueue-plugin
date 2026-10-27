@@ -12,6 +12,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/clientcmd"
@@ -31,6 +33,8 @@ const (
 	DefaultLocalQueue         = "pipelines-queue"
 	DefaultResourceFlavor     = "default-flavor"
 	PipelineResourceName      = "tekton.dev/pipelineruns"
+	ClusterRoleSpoke          = "Spoke"
+	TektonConfigName          = "config"
 )
 
 // +kubebuilder:rbac:groups="kueue.openshift.io",resources=kueues,verbs=get;list;create;patch;update;watch
@@ -97,6 +101,36 @@ func (r *ClusterBootstrap) ensureKueue(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (r *ClusterBootstrap) enableKueueInTektonConfig(ctx context.Context) error {
+	logger := log.FromContext(ctx).WithName("enableKueueInTektonConfig")
+
+	logger.Info("Enabling Kueue on Spoke")
+	gvk := schema.GroupVersionKind{
+		Group:   "operator.tekton.dev",
+		Version: "v1alpha1",
+		Kind:    "TektonConfig",
+	}
+	// JSON Merge Patch payload
+	patchData := []byte(`{
+        "spec": {
+            "scheduler": {
+                "disabled": false,
+				"multi-cluster-disabled": true,
+				"multi-cluster-role": ""
+            }
+        }
+    }`)
+	return r.patchUnstructuredObject(ctx, gvk, TektonConfigName, patchData)
+}
+
+func (r *ClusterBootstrap) patchUnstructuredObject(ctx context.Context, gvk schema.GroupVersionKind, name string, patchData []byte) error {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetName(name)
+	return r.Patch(ctx, obj, client.RawPatch(types.MergePatchType, patchData))
+
 }
 
 func ensureExternalFramework(frameworks []kueuev1.ExternalFramework, framework kueuev1.ExternalFramework) []kueuev1.ExternalFramework {

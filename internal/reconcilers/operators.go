@@ -19,6 +19,7 @@ import (
 
 type ClusterBootstrap struct {
 	client.Client
+	ClusterRole string
 }
 
 func (b *ClusterBootstrap) Start(ctx context.Context) error {
@@ -60,6 +61,11 @@ func (b *ClusterBootstrap) bootstrap(ctx context.Context) error {
 	} else {
 		logger.Info("Kueue Resource reconciled")
 	}
+
+	if b.ClusterRole == ClusterRoleSpoke {
+		return b.enableKueueInTektonConfig(ctx)
+	}
+
 	return nil
 }
 
