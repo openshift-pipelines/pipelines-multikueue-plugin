@@ -10,6 +10,7 @@ import (
 	olm "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
@@ -289,5 +290,84 @@ func TestStart(t *testing.T) {
 		if err := b.Get(ctx, tc.key, tc.obj); err != nil {
 			t.Errorf("%s was not created by Start(): %v", tc.name, err)
 		}
+	}
+}
+
+// installedSubscriptions is the set bootstrap needs seeded so the readiness
+// poll returns immediately instead of blocking for its 30 minute timeout.
+func installedSubscriptions(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+
+	return newFakeClient(t, append([]client.Object{
+		newInstalledSubscription("openshift-operators", "openshift-pipelines-operator-rh", "openshift-pipelines-operator-rh"),
+		newInstalledSubscription("openshift-kueue-operator", "kueue-operator", "kueue-operator"),
+		newInstalledSubscription("cert-manager-operator", "openshift-cert-manager-operator", "openshift-cert-manager-operator"),
+	}, objs...)...)
+}
+
+// On a spoke, bootstrap finishes by enabling the Tekton scheduler.
+func TestBootstrapEnablesSchedulerOnSpoke(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	b := &ClusterBootstrap{
+		Client:      installedSubscriptions(t, newTektonConfig(TektonConfigName, map[string]any{"disabled": true})),
+		ClusterRole: ClusterRoleSpoke,
+	}
+
+	if err := b.bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap() error = %v", err)
+	}
+
+	got := getTektonConfig(t, b.Client, TektonConfigName)
+	if schedulerBool(t, got, "disabled") {
+		t.Error("scheduler was not enabled on a spoke cluster")
+	}
+	if !schedulerBool(t, got, "multi-cluster-disabled") {
+		t.Error("scheduler multi-cluster handling was not disabled on a spoke cluster")
+	}
+	if role := schedulerString(t, got, "multi-cluster-role"); role != "" {
+		t.Errorf("multi-cluster-role = %q, want it cleared", role)
+	}
+}
+
+// The hub carries no ClusterRole, so the TektonConfig must be left alone.
+func TestBootstrapLeavesSchedulerAloneOnHub(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	b := &ClusterBootstrap{
+		Client: installedSubscriptions(t, newTektonConfig(TektonConfigName, map[string]any{"disabled": true})),
+	}
+	if b.ClusterRole == ClusterRoleSpoke {
+		t.Fatalf("test setup: ClusterRole = %q, want it unset", b.ClusterRole)
+	}
+
+	if err := b.bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap() error = %v", err)
+	}
+
+	got := getTektonConfig(t, b.Client, TektonConfigName)
+	if !schedulerBool(t, got, "disabled") {
+		t.Error("hub bootstrap modified the TektonConfig scheduler, want it untouched")
+	}
+	if _, found, _ := unstructured.NestedString(got.Object, "spec", "scheduler", "multi-cluster-role"); found {
+		t.Error("hub bootstrap set a multi-cluster-role, want the TektonConfig untouched")
+	}
+}
+
+// A spoke with no TektonConfig fails the whole bootstrap rather than
+// silently skipping the scheduler.
+func TestBootstrapFailsOnSpokeWithoutTektonConfig(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	b := &ClusterBootstrap{
+		Client:      installedSubscriptions(t),
+		ClusterRole: ClusterRoleSpoke,
+	}
+
+	if err := b.bootstrap(ctx); err == nil {
+		t.Fatal("bootstrap() error = nil, want the TektonConfig NotFound to propagate")
 	}
 }

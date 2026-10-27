@@ -244,7 +244,8 @@ func (r *MultiKueueReconciler) ensureBootstrapOperators(ctx context.Context, clu
 	}
 
 	bootstrap := &ClusterBootstrap{
-		Client: spokeClient,
+		Client:      spokeClient,
+		ClusterRole: ClusterRoleSpoke,
 	}
 	logger.Info("Installing Operators on Managed Cluster at Start", "Name", cluster.Name)
 
