@@ -2,9 +2,6 @@ name: Go coverage
 
 permissions:
   contents: read
-  actions: read          # download the baseline coverage artifact from main
-  pull-requests: write
-  id-token: write
 
 on:
   pull_request:
@@ -29,6 +26,8 @@ jobs:
   go-coverage:
     name: Go coverage
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -51,6 +50,27 @@ jobs:
         with:
           name: code-coverage
           path: coverage.txt
+
+  report-coverage:
+    name: Report Go coverage
+    needs: go-coverage
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download coverage results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: code-coverage
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v6.0.2

@@ -8,8 +8,10 @@ import (
 	kueuev1 "github.com/openshift/kueue-operator/pkg/apis/kueueoperator/v1"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
@@ -624,5 +626,173 @@ func TestEnsureKubeConfigSecretUpdatesExisting(t *testing.T) {
 	}
 	if target.Labels["multikueue.kueue.x-k8s.io/managed-cluster"] != "cluster-cluster1" {
 		t.Error("managed-cluster label was not applied to the existing secret")
+	}
+}
+
+// enableKueueInTektonConfig flips the TektonScheduler on so Kueue can admit
+// PipelineRuns, turns the scheduler's own multi-cluster handling off and
+// clears its multi-cluster role, leaving cross-cluster dispatch to Kueue.
+// The TektonConfig is patched as an unstructured object, so the Tekton
+// operator Go types are not registered in the client's scheme. It only ever
+// runs against the singleton TektonConfig named "config" on a spoke cluster.
+
+func TestEnableKueueInTektonConfigEnablesScheduler(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		scheduler map[string]any
+	}{
+		{"scheduler explicitly disabled", map[string]any{"disabled": true}},
+		{"scheduler field unset", nil},
+		{"scheduler already enabled", map[string]any{"disabled": false}},
+		{
+			"scheduler carries a stale spoke role",
+			map[string]any{
+				"disabled":               false,
+				"multi-cluster-disabled": false,
+				"multi-cluster-role":     "spoke",
+			},
+		},
+		{
+			"scheduler already in the target state",
+			map[string]any{
+				"disabled":               false,
+				"multi-cluster-disabled": true,
+				"multi-cluster-role":     "",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			r := &ClusterBootstrap{Client: newFakeClient(t, newTektonConfig(TektonConfigName, tc.scheduler))}
+
+			if err := r.enableKueueInTektonConfig(ctx); err != nil {
+				t.Fatalf("enableKueueInTektonConfig() error = %v", err)
+			}
+
+			got := getTektonConfig(t, r.Client, TektonConfigName)
+			if schedulerBool(t, got, "disabled") {
+				t.Error("scheduler disabled = true, want false")
+			}
+			if !schedulerBool(t, got, "multi-cluster-disabled") {
+				t.Error("scheduler multi-cluster-disabled = false, want true")
+			}
+			// The role is written as "" rather than omitted, so a stale role
+			// from an earlier configuration is actively cleared.
+			if role := schedulerString(t, got, "multi-cluster-role"); role != "" {
+				t.Errorf("scheduler multi-cluster-role = %q, want it cleared", role)
+			}
+		})
+	}
+}
+
+// A merge patch only touches the keys it names, so unrelated spec fields on
+// the TektonConfig have to survive.
+func TestEnableKueueInTektonConfigPreservesUnrelatedFields(t *testing.T) {
+	ctx := t.Context()
+	cfg := newTektonConfig(TektonConfigName, map[string]any{"disabled": true})
+	if err := unstructured.SetNestedField(cfg.Object, "all", "spec", "profile"); err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+	if err := unstructured.SetNestedField(cfg.Object, "openshift-pipelines", "spec", "targetNamespace"); err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+	r := &ClusterBootstrap{Client: newFakeClient(t, cfg)}
+
+	if err := r.enableKueueInTektonConfig(ctx); err != nil {
+		t.Fatalf("enableKueueInTektonConfig() error = %v", err)
+	}
+
+	got := getTektonConfig(t, r.Client, TektonConfigName)
+	profile, _, err := unstructured.NestedString(got.Object, "spec", "profile")
+	if err != nil {
+		t.Fatalf("spec.profile: %v", err)
+	}
+	assert.Equal(t, "all", profile, "spec.profile was clobbered by the scheduler patch")
+
+	ns, _, err := unstructured.NestedString(got.Object, "spec", "targetNamespace")
+	if err != nil {
+		t.Fatalf("spec.targetNamespace: %v", err)
+	}
+	assert.Equal(t, "openshift-pipelines", ns, "spec.targetNamespace was clobbered by the scheduler patch")
+}
+
+// Calling it twice must not error or flip the fields back.
+func TestEnableKueueInTektonConfigIsIdempotent(t *testing.T) {
+	ctx := t.Context()
+	r := &ClusterBootstrap{Client: newFakeClient(t, newTektonConfig(TektonConfigName, map[string]any{"disabled": true}))}
+
+	for i := range 2 {
+		if err := r.enableKueueInTektonConfig(ctx); err != nil {
+			t.Fatalf("enableKueueInTektonConfig() call %d error = %v", i+1, err)
+		}
+	}
+
+	got := getTektonConfig(t, r.Client, TektonConfigName)
+	assert.False(t, schedulerBool(t, got, "disabled"))
+	assert.True(t, schedulerBool(t, got, "multi-cluster-disabled"))
+	assert.Equal(t, "", schedulerString(t, got, "multi-cluster-role"))
+}
+
+// With no TektonConfig present the patch error is returned verbatim, which
+// propagates out of bootstrap and fails the spoke rollout.
+func TestEnableKueueInTektonConfigMissingConfig(t *testing.T) {
+	ctx := t.Context()
+	r := &ClusterBootstrap{Client: newFakeClient(t)}
+
+	err := r.enableKueueInTektonConfig(ctx)
+	if err == nil {
+		t.Fatal("enableKueueInTektonConfig() error = nil, want NotFound")
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("error = %v, want a NotFound error", err)
+	}
+}
+
+// Only the singleton named "config" is touched; a differently named
+// TektonConfig is neither read nor patched.
+func TestEnableKueueInTektonConfigIgnoresOtherNames(t *testing.T) {
+	ctx := t.Context()
+	other := newTektonConfig("not-config", map[string]any{"disabled": true})
+	r := &ClusterBootstrap{Client: newFakeClient(t, other)}
+
+	if err := r.enableKueueInTektonConfig(ctx); !apierrors.IsNotFound(err) {
+		t.Fatalf("enableKueueInTektonConfig() error = %v, want NotFound", err)
+	}
+
+	got := getTektonConfig(t, r.Client, "not-config")
+	if !schedulerBool(t, got, "disabled") {
+		t.Error("unrelated TektonConfig scheduler was modified, want it left disabled")
+	}
+}
+
+// patchUnstructuredObject is the generic escape hatch for CRDs whose Go types
+// are not compiled in. It addresses an object purely by GVK and name.
+func TestPatchUnstructuredObject(t *testing.T) {
+	ctx := t.Context()
+	cfg := newTektonConfig(TektonConfigName, nil)
+	r := &ClusterBootstrap{Client: newFakeClient(t, cfg)}
+
+	patch := []byte(`{"spec":{"profile":"basic"}}`)
+	if err := r.patchUnstructuredObject(ctx, tektonConfigGVK, TektonConfigName, patch); err != nil {
+		t.Fatalf("patchUnstructuredObject() error = %v", err)
+	}
+
+	got := getTektonConfig(t, r.Client, TektonConfigName)
+	profile, found, err := unstructured.NestedString(got.Object, "spec", "profile")
+	if err != nil || !found {
+		t.Fatalf("spec.profile not set after patch (found=%v, err=%v)", found, err)
+	}
+	assert.Equal(t, "basic", profile)
+}
+
+// A GVK with no matching object yields NotFound rather than silently
+// creating one.
+func TestPatchUnstructuredObjectMissingObject(t *testing.T) {
+	ctx := t.Context()
+	r := &ClusterBootstrap{Client: newFakeClient(t)}
+
+	err := r.patchUnstructuredObject(ctx, tektonConfigGVK, "nope", []byte(`{"spec":{"profile":"basic"}}`))
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("patchUnstructuredObject() error = %v, want NotFound", err)
 	}
 }

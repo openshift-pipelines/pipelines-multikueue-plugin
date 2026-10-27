@@ -69,7 +69,7 @@ The local cluster is skipped when its `ManagedCluster` has the label `local-clus
 - The Managed Service Account add-on and API
 - OLM access to the `redhat-operators` catalog on the hub and managed clusters
 - Cluster-admin access for deployment
-- Go 1.26.5 for local development
+- Go 1.26+ for local development
 - Docker or Podman and an image registry for building and deploying a custom image
 
 > [!IMPORTANT]

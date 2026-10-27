@@ -1,6 +1,7 @@
 package reconcilers
 
 import (
+	"context"
 	"testing"
 
 	kueuev1 "github.com/openshift/kueue-operator/pkg/apis/kueueoperator/v1"
@@ -8,7 +9,9 @@ import (
 	olm "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
@@ -57,6 +60,73 @@ func newSecret(namespace, name string, data map[string][]byte) *corev1.Secret {
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
 		Data:       data,
 	}
+}
+
+// tektonConfigGVK mirrors the GVK enableKueueInTektonConfig patches. The
+// reconcilers talk to the TektonConfig as an unstructured object, so the
+// Tekton operator types are deliberately absent from the test scheme.
+var tektonConfigGVK = schema.GroupVersionKind{
+	Group:   "operator.tekton.dev",
+	Version: "v1alpha1",
+	Kind:    "TektonConfig",
+}
+
+// newTektonConfig returns an unstructured TektonConfig whose spec.scheduler
+// holds the given fields. A nil scheduler means the field is absent, which is
+// how a cluster that has never had the scheduler configured looks.
+func newTektonConfig(name string, scheduler map[string]any) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(tektonConfigGVK)
+	obj.SetName(name)
+	if scheduler != nil {
+		if err := unstructured.SetNestedMap(obj.Object, scheduler, "spec", "scheduler"); err != nil {
+			panic(err)
+		}
+	}
+	return obj
+}
+
+// getTektonConfig reads the TektonConfig back as unstructured, the same way
+// the reconciler writes it.
+func getTektonConfig(t *testing.T, c client.Client, name string) *unstructured.Unstructured {
+	t.Helper()
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(tektonConfigGVK)
+	if err := c.Get(context.Background(), client.ObjectKey{Name: name}, got); err != nil {
+		t.Fatalf("TektonConfig %q was not readable: %v", name, err)
+	}
+	return got
+}
+
+// schedulerBool reads spec.scheduler.<field> and fails the test if it is
+// absent or not a bool.
+func schedulerBool(t *testing.T, obj *unstructured.Unstructured, field string) bool {
+	t.Helper()
+
+	v, found, err := unstructured.NestedBool(obj.Object, "spec", "scheduler", field)
+	if err != nil {
+		t.Fatalf("spec.scheduler.%s is not a bool: %v", field, err)
+	}
+	if !found {
+		t.Fatalf("spec.scheduler.%s is absent, want it set", field)
+	}
+	return v
+}
+
+// schedulerString reads spec.scheduler.<field> and fails the test if it is
+// absent or not a string.
+func schedulerString(t *testing.T, obj *unstructured.Unstructured, field string) string {
+	t.Helper()
+
+	v, found, err := unstructured.NestedString(obj.Object, "spec", "scheduler", field)
+	if err != nil {
+		t.Fatalf("spec.scheduler.%s is not a string: %v", field, err)
+	}
+	if !found {
+		t.Fatalf("spec.scheduler.%s is absent, want it set", field)
+	}
+	return v
 }
 
 func newManagedCluster(name string, urls ...string) *clusterv1.ManagedCluster {
