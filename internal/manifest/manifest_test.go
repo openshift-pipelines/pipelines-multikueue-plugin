@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"io/fs"
+	"slices"
 	"testing"
 
 	"sigs.k8s.io/yaml"
@@ -92,5 +93,43 @@ func TestManifestFSHasNoExtraFiles(t *testing.T) {
 func TestManifestFSMissingFile(t *testing.T) {
 	if _, err := ManifestFS.ReadFile("manifests/nope.yaml"); err == nil {
 		t.Fatal("ReadFile succeeded for a missing file, want an error")
+	}
+}
+
+// The spoke ClusterBootstrap reads and patches the singleton TektonConfig to
+// enable the Tekton scheduler. The ClusterRole shipped to the managed cluster
+// has to carry that permission or the patch is rejected at runtime.
+func TestClusterRoleGrantsTektonConfigAccess(t *testing.T) {
+	data, err := ManifestFS.ReadFile("manifests/cluster-role.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+
+	var role struct {
+		Rules []struct {
+			APIGroups []string `json:"apiGroups"`
+			Resources []string `json:"resources"`
+			Verbs     []string `json:"verbs"`
+		} `json:"rules"`
+	}
+	if err := yaml.Unmarshal(data, &role); err != nil {
+		t.Fatalf("cluster-role.yaml is not valid YAML: %v", err)
+	}
+
+	var found bool
+	for _, rule := range role.Rules {
+		if !slices.Contains(rule.APIGroups, "operator.tekton.dev") ||
+			!slices.Contains(rule.Resources, "tektonconfigs") {
+			continue
+		}
+		found = true
+		for _, verb := range []string{"get", "patch"} {
+			if !slices.Contains(rule.Verbs, verb) {
+				t.Errorf("tektonconfigs rule verbs = %v, missing %q", rule.Verbs, verb)
+			}
+		}
+	}
+	if !found {
+		t.Error("cluster-role.yaml has no rule for operator.tekton.dev/tektonconfigs")
 	}
 }
