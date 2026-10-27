@@ -1,0 +1,234 @@
+name: Cherry-pick
+
+# Opens a backport PR when a maintainer comments
+#
+#   /cherry-pick <target-branch>
+#
+# on a merged pull request. This is the equivalent of the Prow `/cherrypick`
+# command tektoncd uses; this repo has no Prow, so it is implemented with
+# plain Actions and the gh CLI. `/cherrypick` is accepted as an alias.
+
+permissions:
+  contents: read
+
+on:
+  issue_comment:
+    types:
+      - created
+
+concurrency:
+  # Serialise per PR so two comments in quick succession cannot race on the
+  # same branch name.
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  cherry-pick:
+    name: Cherry-pick
+    # issue_comment also fires for plain issues; `.pull_request` is only
+    # present on PR comments. The body check keeps the job off the queue for
+    # ordinary conversation.
+    if: >-
+      github.event.issue.pull_request != null &&
+      (startsWith(github.event.comment.body, '/cherry-pick') ||
+       startsWith(github.event.comment.body, '/cherrypick'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      # Everything the request depends on is validated before anything is
+      # written, so an invalid command never leaves a branch behind.
+      - name: Validate request
+        id: request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          # Comment text is attacker-controlled. It is passed through the
+          # environment and never interpolated into a shell command, which
+          # would be a script injection.
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "error=$1" >> "${GITHUB_OUTPUT}"
+            echo "proceed=false" >> "${GITHUB_OUTPUT}"
+            echo "::error::$1"
+            exit 0
+          }
+
+          # The job holds contents:write, so an unauthenticated trigger would
+          # let any commenter push a branch to this repo.
+          permission="$(gh api "repos/${REPO}/collaborators/${COMMENTER}/permission" --jq '.permission' 2>/dev/null || echo none)"
+          case "${permission}" in
+            admin | write | maintain) ;;
+            *)
+              echo "::notice::${COMMENTER} has '${permission}' permission on ${REPO}; ignoring."
+              echo "proceed=false" >> "${GITHUB_OUTPUT}"
+              exit 0
+              ;;
+          esac
+
+          # Only the first line is a command; anything after it is prose.
+          command_line="$(printf '%s' "${COMMENT_BODY}" | head -n 1 | tr -d '\r')"
+          read -r _verb target _rest <<<"${command_line}"
+
+          if [[ -z "${target:-}" ]]; then
+            fail "No target branch given. Usage: \`/cherry-pick <target-branch>\`."
+          fi
+          if [[ -n "${_rest:-}" ]]; then
+            fail "Expected exactly one target branch, got: \`${command_line}\`."
+          fi
+          # Refuse anything that is not a plain ref name, so the value is safe
+          # to hand to git and cannot smuggle in options or shell characters.
+          if [[ ! "${target}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+            fail "\`${target}\` is not a valid branch name."
+          fi
+
+          pr_json="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
+          merged="$(jq -r '.merged' <<<"${pr_json}")"
+          merge_sha="$(jq -r '.merge_commit_sha // empty' <<<"${pr_json}")"
+          pr_title="$(jq -r '.title' <<<"${pr_json}")"
+
+          if [[ "${merged}" != "true" ]]; then
+            fail "PR #${PR_NUMBER} is not merged yet. Cherry-pick once it has landed."
+          fi
+          if [[ -z "${merge_sha}" ]]; then
+            fail "PR #${PR_NUMBER} has no merge commit to cherry-pick."
+          fi
+          if ! gh api "repos/${REPO}/branches/${target}" --silent 2>/dev/null; then
+            fail "Target branch \`${target}\` does not exist."
+          fi
+
+          {
+            echo "proceed=true"
+            echo "target=${target}"
+            echo "merge_sha=${merge_sha}"
+            echo "pr_title=${pr_title}"
+            echo "branch=cherry-pick/pr-${PR_NUMBER}-to-${target}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout
+        if: steps.request.outputs.proceed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the merge commit being picked is usually far behind
+          # the tip of the target branch.
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Cherry-pick
+        id: pick
+        if: steps.request.outputs.proceed == 'true'
+        env:
+          TARGET: ${{ steps.request.outputs.target }}
+          BRANCH: ${{ steps.request.outputs.branch }}
+          MERGE_SHA: ${{ steps.request.outputs.merge_sha }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git switch --create "${BRANCH}" "origin/${TARGET}"
+
+          # A squash or rebase merge leaves a single-parent commit; a true
+          # merge commit needs the mainline parent naming explicitly.
+          parents="$(git rev-list --parents -n 1 "${MERGE_SHA}" | wc -w)"
+          if (( parents > 2 )); then
+            mainline=(-m 1)
+          else
+            mainline=()
+          fi
+
+          if ! git cherry-pick -x "${mainline[@]}" "${MERGE_SHA}"; then
+            git cherry-pick --abort || true
+            echo "conflict=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "conflict=false" >> "${GITHUB_OUTPUT}"
+          git push --force-with-lease origin "${BRANCH}"
+
+      - name: Open pull request
+        id: open
+        if: steps.request.outputs.proceed == 'true' && steps.pick.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ steps.request.outputs.target }}
+          BRANCH: ${{ steps.request.outputs.branch }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          PR_TITLE: ${{ steps.request.outputs.pr_title }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+
+          # Re-running the command after a force-push should update the
+          # existing PR rather than fail on a duplicate.
+          existing="$(gh pr list --head "${BRANCH}" --base "${TARGET}" --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "${existing}" ]]; then
+            echo "number=${existing}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          body="$(printf '%s\n' \
+            "Automated cherry-pick of #${PR_NUMBER} onto \`${TARGET}\`, requested by @${COMMENTER}." \
+            "" \
+            "Applied cleanly with no conflicts. CI does not run automatically on" \
+            "branches pushed by \`GITHUB_TOKEN\`, so close and reopen this PR to" \
+            "trigger the checks before merging." \
+            "" \
+            "/assign @${COMMENTER}")"
+
+          number="$(gh pr create \
+            --base "${TARGET}" \
+            --head "${BRANCH}" \
+            --title "[${TARGET}] ${PR_TITLE}" \
+            --body "${body}" \
+            | grep -oE '[0-9]+$')"
+          echo "number=${number}" >> "${GITHUB_OUTPUT}"
+
+      - name: Report outcome
+        if: always() && steps.request.outputs.proceed != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          TARGET: ${{ steps.request.outputs.target }}
+          BRANCH: ${{ steps.request.outputs.branch }}
+          MERGE_SHA: ${{ steps.request.outputs.merge_sha }}
+          ERROR: ${{ steps.request.outputs.error }}
+          CONFLICT: ${{ steps.pick.outputs.conflict }}
+          NEW_PR: ${{ steps.open.outputs.number }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${ERROR}" ]]; then
+            message="@${COMMENTER}: ${ERROR}"
+          elif [[ "${CONFLICT}" == "true" ]]; then
+            message="$(printf '%s\n' \
+              "@${COMMENTER}: cherry-pick of \`${MERGE_SHA}\` onto \`${TARGET}\` hit conflicts, so no PR was opened." \
+              "" \
+              "To do it by hand:" \
+              '```bash' \
+              "git fetch origin" \
+              "git switch --create ${BRANCH} origin/${TARGET}" \
+              "git cherry-pick -x ${MERGE_SHA}" \
+              "# resolve, then:" \
+              "git push origin ${BRANCH}" \
+              '```')"
+          elif [[ -n "${NEW_PR}" ]]; then
+            message="@${COMMENTER}: opened #${NEW_PR} — cherry-pick of this PR onto \`${TARGET}\`."
+          else
+            exit 0
+          fi
+
+          gh pr comment "${PR_NUMBER}" --body "${message}"
