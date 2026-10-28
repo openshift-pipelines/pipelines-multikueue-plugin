@@ -5,62 +5,91 @@ import (
 	"testing"
 )
 
-func TestGetKueueNamespace(t *testing.T) {
+func TestGetEnvOrDefault(t *testing.T) {
+	const envName = "PIPELINES_MULTIKUEUE_TEST_VALUE"
+
 	tests := []struct {
 		name     string
 		envSet   bool
 		envValue string
 		want     string
 	}{
-		{
-			name:   "unset falls back to default",
-			envSet: false,
-			want:   "openshift-kueue-operator",
-		},
-		{
-			name:     "empty falls back to default",
-			envSet:   true,
-			envValue: "",
-			want:     "openshift-kueue-operator",
-		},
-		{
-			name:     "override is used",
-			envSet:   true,
-			envValue: "kueue-system",
-			want:     "kueue-system",
-		},
-		{
-			name:     "whitespace is not trimmed",
-			envSet:   true,
-			envValue: " ",
-			want:     " ",
-		},
+		{name: "unset falls back to default", envSet: false, want: "fallback"},
+		{name: "empty falls back to default", envSet: true, envValue: "", want: "fallback"},
+		{name: "override is used", envSet: true, envValue: "override", want: "override"},
+		{name: "whitespace is not trimmed", envSet: true, envValue: " ", want: " "},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.envSet {
-				t.Setenv(KueueNamespaceEnv, tt.envValue)
+				t.Setenv(envName, tt.envValue)
 			} else {
-				unsetEnv(t, KueueNamespaceEnv)
+				unsetEnv(t, envName)
 			}
 
-			if got := getKueueNamespace(); got != tt.want {
-				t.Errorf("getKueueNamespace() = %q, want %q", got, tt.want)
+			if got := GetEnvOrDefault(envName, "fallback"); got != tt.want {
+				t.Errorf("GetEnvOrDefault() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestKueueNamespaceDefault(t *testing.T) {
-	// KueueNamespace is resolved once at package initialization, so it only
-	// reflects the environment the test binary was started with.
-	want := os.Getenv(KueueNamespaceEnv)
-	if want == "" {
-		want = "openshift-kueue-operator"
+// TestOperatorGetters checks that every operator channel and namespace getter
+// is wired to its own environment variable and its own default. Crossed wiring
+// between the six is the mistake worth catching here.
+func TestOperatorGetters(t *testing.T) {
+	getters := []struct {
+		name        string
+		fn          func() string
+		env         string
+		defaultWant string
+	}{
+		// Channel defaults are bumped per release, so these assert the getter
+		// is wired to the right constant rather than to a frozen value.
+		{"GetPipelinesOperatorChannel", GetPipelinesOperatorChannel, PipelinesOperatorChannelEnv, DefaultPipelinesOperatorChannel},
+		{"GetKueueOperatorChannel", GetKueueOperatorChannel, KueueOperatorChannelEnv, DefaultKueueOperatorChannel},
+		{"GetCertManagerOperatorChannel", GetCertManagerOperatorChannel, CertManagerOperatorChannelEnv, DefaultCertManagerOperatorChannel},
+		{"GetPipelinesOperatorNamespace", GetPipelinesOperatorNamespace, PipelinesOperatorNamespaceEnv, "openshift-operators"},
+		{"GetKueueOperatorNamespace", GetKueueOperatorNamespace, KueueNamespaceEnv, "openshift-kueue-operator"},
+		{"GetCertManagerOperatorNamespace", GetCertManagerOperatorNamespace, CertManagerOperatorNamespaceEnv, "cert-manager-operator"},
 	}
-	if KueueNamespace != want {
-		t.Errorf("KueueNamespace = %q, want %q", KueueNamespace, want)
+
+	// Every variable in play, so a getter reading the wrong one is visible.
+	allEnvs := make([]string, 0, len(getters))
+	for _, g := range getters {
+		allEnvs = append(allEnvs, g.env)
+	}
+
+	for _, g := range getters {
+		t.Run(g.name, func(t *testing.T) {
+			tests := []struct {
+				name     string
+				envSet   bool
+				envValue string
+				want     string
+			}{
+				{name: "unset falls back to default", envSet: false, want: g.defaultWant},
+				{name: "empty falls back to default", envSet: true, envValue: "", want: g.defaultWant},
+				{name: "override is used", envSet: true, envValue: "overridden", want: "overridden"},
+				{name: "whitespace is not trimmed", envSet: true, envValue: " ", want: " "},
+			}
+
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					for _, env := range allEnvs {
+						unsetEnv(t, env)
+					}
+					if tt.envSet {
+						t.Setenv(g.env, tt.envValue)
+					}
+
+					if got := g.fn(); got != tt.want {
+						t.Errorf("%s() = %q, want %q", g.name, got, tt.want)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -93,16 +122,6 @@ func TestGetMultiKueueSecretName(t *testing.T) {
 				t.Errorf("GetMultiKueueSecretName(%q) = %q, want %q", tt.clusterName, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestGetMultiKueueSecretNameUsesResourceName(t *testing.T) {
-	original := MultiKueueResourceName
-	t.Cleanup(func() { MultiKueueResourceName = original })
-
-	MultiKueueResourceName = "custom"
-	if got, want := GetMultiKueueSecretName("cluster1"), "custom-cluster1"; got != want {
-		t.Errorf("GetMultiKueueSecretName() = %q, want %q", got, want)
 	}
 }
 
@@ -176,6 +195,17 @@ func TestConstants(t *testing.T) {
 		{"KueueNamespaceEnv", KueueNamespaceEnv, "KUEUE_NAMESPACE"},
 		{"ClusterProxyImpersonationEnv", ClusterProxyImpersonationEnv, "CLUSTER_PROXY_IMPERSONATION_ENABLED"},
 		{"EnableClusterProfileEnv", EnableClusterProfileEnv, "ENABLE_CLUSTERPROFILE"},
+		{"PipelinesOperatorChannelEnv", PipelinesOperatorChannelEnv, "PIPELINES_OPERATOR_CHANNEL"},
+		{"KueueOperatorChannelEnv", KueueOperatorChannelEnv, "KUEUE_OPERATOR_CHANNEL"},
+		{"CertManagerOperatorChannelEnv", CertManagerOperatorChannelEnv, "CERT_MANAGER_OPERATOR_CHANNEL"},
+		{"PipelinesOperatorNamespaceEnv", PipelinesOperatorNamespaceEnv, "PIPELINES_OPERATOR_NAMESPACE"},
+		{"CertManagerOperatorNamespaceEnv", CertManagerOperatorNamespaceEnv, "CERT_MANAGER_OPERATOR_NAMESPACE"},
+		{"PipelinesOperatorPackage", PipelinesOperatorPackage, "openshift-pipelines-operator-rh"},
+		{"KueueOperatorPackage", KueueOperatorPackage, "kueue-operator"},
+		{"CertManagerOperatorPackage", CertManagerOperatorPackage, "openshift-cert-manager-operator"},
+		{"DefaultKueueOperatorNamespace", DefaultKueueOperatorNamespace, "openshift-kueue-operator"},
+		{"DefaultPipelinesOperatorNamespace", DefaultPipelinesOperatorNamespace, "openshift-operators"},
+		{"DefaultCertManagerOperatorNamespace", DefaultCertManagerOperatorNamespace, "cert-manager-operator"},
 		{"MultiKueueResourceName", MultiKueueResourceName, "multikueue"},
 		{"AdmissionCheckControllerName", AdmissionCheckControllerName, "open-cluster-management.io/placement"},
 	}

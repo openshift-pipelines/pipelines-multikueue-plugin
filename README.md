@@ -48,7 +48,7 @@ flowchart LR
 
 On the hub, the controller:
 
-- creates OLM subscriptions for Red Hat OpenShift Pipelines, the Red Hat build of Kueue Operator, and cert-manager Operator for Red Hat OpenShift;
+- creates OLM subscriptions for Red Hat OpenShift Pipelines, the Red Hat build of Kueue Operator, and cert-manager Operator for Red Hat OpenShift, and [upgrades](#operator-upgrades) the ones it created;
 - configures `tekton.dev/v1` `PipelineRun` as a Kueue external framework;
 - creates the default resource flavor, cluster queue, local queue, admission check, and MultiKueue configuration; and
 - creates a `MultiKueueCluster` for every eligible managed cluster.
@@ -56,7 +56,7 @@ On the hub, the controller:
 For each managed cluster, it:
 
 - creates a `ManagedServiceAccount` and the RBAC needed to access the cluster;
-- installs and configures the required operators through the managed-cluster credentials; and
+- installs, upgrades, and configures the required operators through the managed-cluster credentials; and
 - maintains the kubeconfig Secret used by MultiKueue.
 
 The local cluster is skipped when its `ManagedCluster` has the label `local-cluster=true`.
@@ -142,14 +142,60 @@ spec:
 
 Create a `LocalQueue` pointing to `pipelines-multicluster-kueue` before submitting queued `PipelineRuns` in another namespace.
 
+## Operator upgrades
+
+Each reconcile compares the channel of every operator Subscription against the default channel in the table below. When the default is newer, the controller moves the Subscription onto it and OLM performs the upgrade. It then waits for `status.installedCSV` to catch up with `status.currentCSV` before continuing.
+
+**Only the controller's own operators are touched.** A Subscription it created carries the label `app.kubernetes.io/managed-by: pipelines-multikueue-plugin`. If an operator was already on the cluster when the controller arrived, or was installed by someone else, its channel is left alone and its lifecycle stays with whoever owns it. The controller stamps the same label on the namespaces and `OperatorGroups` it creates. This holds unconditionally — nothing below overrides it.
+
+A Kubernetes `ownerReference` cannot express this, because the controller runs on the hub while most of these resources live on a managed cluster, and an `ownerReference` only resolves inside one cluster.
+
+Beyond ownership, how far the controller will move a channel depends on where that channel came from:
+
+| Channel source | Behaviour |
+| --- | --- |
+| Compiled-in default (env var unset) | Applied **only when demonstrably newer**, so an unattended rollout never walks an operator backwards. |
+| Set on the Deployment (env var present) | Applied **exactly as written** — including a pin, a sideways move, or a rollback. |
+
+A channel counts as newer only when it shares a prefix with the installed one and ends in a higher dotted version, so `stable-v1` to `stable-v1.4` is an upgrade and `stable-v1.9` to `stable-v1.10` is too. Channels that cannot be ordered against each other — `latest` versus `pipelines-1.23`, or a rename such as `stable` to `fast` — are not comparable, and the automatic path leaves them alone.
+
+Setting the variable is what distinguishes a deliberate choice from a default, so pinning works even across that boundary:
+
+```sh
+# Pin Pipelines to a specific release, even if it is currently on `latest`.
+kubectl set env deployment/pipelines-multikueue-plugin-controller \
+  -n tekton-kueue \
+  PIPELINES_OPERATOR_CHANNEL=pipelines-1.23
+```
+
+The controller reads its environment on every reconcile, so this takes effect as soon as the new pod is running. A pin that moves an operator sideways or backwards is logged as such. Clear the variable to hand the operator back to the forward-only default.
+
+Operators installed by an earlier run of the controller already carry the ownership label, so they are picked up on the next reconcile.
+
+> [!NOTE]
+> Subscriptions created before this label existed are indistinguishable from ones the cluster already had, so they are not upgraded automatically. Add the label by hand to opt an existing Subscription in:
+>
+> ```sh
+> kubectl label subscription.operators.coreos.com kueue-operator \
+>   -n openshift-kueue-operator \
+>   app.kubernetes.io/managed-by=pipelines-multikueue-plugin
+> ```
+
 ## Defaults
+
+Operator channels and namespaces are read from the controller's environment on every reconcile. Everything else is compiled in.
+
+| Setting | Environment variable | Default |
+| --- | --- | --- |
+| OpenShift Pipelines channel | `PIPELINES_OPERATOR_CHANNEL` | `pipelines-1.22` |
+| Kueue Operator channel | `KUEUE_OPERATOR_CHANNEL` | `stable-v1.4` |
+| cert-manager Operator channel | `CERT_MANAGER_OPERATOR_CHANNEL` | `stable-v1` |
+| OpenShift Pipelines namespace | `PIPELINES_OPERATOR_NAMESPACE` | `openshift-operators` |
+| Kueue namespace | `KUEUE_NAMESPACE` | `openshift-kueue-operator` |
+| cert-manager namespace | `CERT_MANAGER_OPERATOR_NAMESPACE` | `cert-manager-operator` |
 
 | Setting | Default                                  |
 | --- |------------------------------------------|
-| OpenShift Pipelines channel | `latest`                                 |
-| Kueue Operator channel | `stable-v1.4`                            |
-| cert-manager Operator channel | `stable-v1`                              |
-| Kueue namespace | `openshift-kueue-operator`               |
 | Resource flavor | `default-flavor`                         |
 | Cluster queue | `pipelines-multicluster-kueue`           |
 | Local queue | `pipelines-queue` in `default` namespace |
