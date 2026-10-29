@@ -35,9 +35,9 @@ spec:
         imagePullPolicy: Always
         name: controller
         # The operator channels and namespaces below are compiled into the
-        # image. Uncomment an entry to pin or upgrade one without rebuilding;
-        # the controller reads them on every reconcile. Raising a channel
-        # upgrades that operator wherever the controller installed it.
+        # image. To pin or upgrade one without rebuilding, change env: [] to
+        # env: and uncomment the desired name/value pairs below. The controller
+        # reads them on every reconcile.
         env: []
         # - name: PIPELINES_OPERATOR_CHANNEL
         #   value: pipelines-1.22
