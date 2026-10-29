@@ -142,6 +142,7 @@ func (c *ClusterBootstrap) ensureOperator(ctx context.Context, op operator) erro
 	}
 
 	key := client.ObjectKey{Name: op.packageName, Namespace: op.namespace}
+	var previousCurrentCSV *string
 
 	if existing == nil {
 		logger.Info("Subscription not found. Creating it.", "packageName", op.packageName)
@@ -172,14 +173,22 @@ func (c *ClusterBootstrap) ensureOperator(ctx context.Context, op operator) erro
 		key = client.ObjectKeyFromObject(existing)
 		logger.Info("Subscription found", "Package", op.packageName, "subscription", existing.Name, "Namespace", existing.Namespace)
 
+		previousChannel := ""
+		if existing.Spec != nil {
+			previousChannel = existing.Spec.Channel
+		}
+		currentCSV := existing.Status.CurrentCSV
 		if err := c.upgradeSubscription(ctx, existing, op); err != nil {
 			return err
+		}
+		if existing.Spec != nil && existing.Spec.Channel != previousChannel {
+			previousCurrentCSV = &currentCSV
 		}
 	}
 
 	logger.Info("Waiting for operator to become ready...")
 
-	return c.waitForSubscription(ctx, key)
+	return c.waitForSubscription(ctx, key, previousCurrentCSV)
 }
 
 // findSubscription returns the Subscription for packageName wherever it lives
@@ -244,10 +253,9 @@ func (c *ClusterBootstrap) upgradeSubscription(ctx context.Context, sub *olm.Sub
 }
 
 // waitForSubscription blocks until OLM reports the Subscription as installed.
-// After a channel change OLM points CurrentCSV at the new version while
-// InstalledCSV still names the old one, so the two matching is what marks an
-// upgrade as finished.
-func (c *ClusterBootstrap) waitForSubscription(ctx context.Context, key client.ObjectKey) error {
+// After a channel change, OLM must first report a new CurrentCSV before matching
+// CurrentCSV and InstalledCSV marks the upgrade as finished.
+func (c *ClusterBootstrap) waitForSubscription(ctx context.Context, key client.ObjectKey, previousCurrentCSV *string) error {
 	logger := log.FromContext(ctx)
 
 	return wait.PollUntilContextTimeout(ctx, 5*time.Second, 30*time.Minute, true, func(ctx context.Context) (bool, error) {
@@ -262,20 +270,35 @@ func (c *ClusterBootstrap) waitForSubscription(ctx context.Context, key client.O
 		}
 
 		// Directly access the Status field instead of parsing unstructured maps
-		if sub.Status.InstalledCSV == "" {
-			logger.Info("Waiting for CSV to be installed", "subscription", key.Name, "Status", sub.Status)
-			return false, nil
-		}
-
-		if sub.Status.CurrentCSV != "" && sub.Status.CurrentCSV != sub.Status.InstalledCSV {
-			logger.Info("Waiting for operator upgrade to complete", "subscription", key.Name,
-				"InstalledCSV", sub.Status.InstalledCSV, "CurrentCSV", sub.Status.CurrentCSV)
+		if !subscriptionReady(sub.Status, previousCurrentCSV) {
+			switch {
+			case sub.Status.InstalledCSV == "":
+				logger.Info("Waiting for CSV to be installed", "subscription", key.Name, "Status", sub.Status)
+			case sub.Status.CurrentCSV != "" && sub.Status.CurrentCSV != sub.Status.InstalledCSV:
+				logger.Info("Waiting for operator upgrade to complete", "subscription", key.Name,
+					"InstalledCSV", sub.Status.InstalledCSV, "CurrentCSV", sub.Status.CurrentCSV)
+			default:
+				logger.Info("Waiting for OLM to process the channel change", "subscription", key.Name,
+					"CurrentCSV", sub.Status.CurrentCSV)
+			}
 			return false, nil
 		}
 
 		logger.Info("Subscription is ready", "Namespace", key.Namespace, "subscription", key.Name, "InstalledCSV", sub.Status.InstalledCSV)
 		return true, nil
 	})
+}
+
+func subscriptionReady(status olm.SubscriptionStatus, previousCurrentCSV *string) bool {
+	if status.InstalledCSV == "" {
+		return false
+	}
+
+	if status.CurrentCSV != "" && status.CurrentCSV != status.InstalledCSV {
+		return false
+	}
+
+	return previousCurrentCSV == nil || (status.CurrentCSV != "" && status.CurrentCSV != *previousCurrentCSV)
 }
 
 func (c *ClusterBootstrap) ensureOperatorGroup(ctx context.Context, namespace string) error {

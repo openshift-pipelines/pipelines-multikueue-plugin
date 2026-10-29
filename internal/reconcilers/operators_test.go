@@ -340,6 +340,25 @@ func getSubscription(t *testing.T, c client.Client, namespace, name string) *olm
 	return sub
 }
 
+type readySubscriptionUpgradeClient struct {
+	client.Client
+}
+
+func (c readySubscriptionUpgradeClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := c.Client.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	if sub, ok := obj.(*olm.Subscription); ok {
+		sub.Status.CurrentCSV = "operator.v1.1.0"
+		sub.Status.InstalledCSV = "operator.v1.1.0"
+	}
+	return nil
+}
+
+func newReadySubscriptionUpgradeClient(t *testing.T, objs ...client.Object) client.Client {
+	return readySubscriptionUpgradeClient{Client: newFakeClient(t, objs...)}
+}
+
 func TestEnsureOperatorAdoptsExistingSubscription(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -414,7 +433,7 @@ func TestEnsureOperatorUpgradesOwnedSubscription(t *testing.T) {
 	defer cancel()
 
 	existing := addonOwned(newSubscriptionOnChannel("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage, "stable-v1.3"))
-	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
+	b := &ClusterBootstrap{Client: newReadySubscriptionUpgradeClient(t, existing)}
 
 	if err := b.ensureOperator(ctx, testOperator(common.KueueOperatorPackage, "stable-v1.4", "openshift-kueue-operator")); err != nil {
 		t.Fatalf("ensureOperator() error = %v", err)
@@ -470,7 +489,7 @@ func TestEnsureOperatorAppliesUnversionedDesiredChannel(t *testing.T) {
 	defer cancel()
 
 	existing := addonOwned(newSubscriptionOnChannel("openshift-operators", common.PipelinesOperatorPackage, common.PipelinesOperatorPackage, "pipelines-1.19"))
-	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
+	b := &ClusterBootstrap{Client: newReadySubscriptionUpgradeClient(t, existing)}
 
 	if err := b.ensureOperator(ctx, testOperator(common.PipelinesOperatorPackage, "latest", "openshift-operators")); err != nil {
 		t.Fatalf("ensureOperator() error = %v", err)
@@ -489,7 +508,7 @@ func TestEnsureOperatorUpgradesFromUnversionedChannel(t *testing.T) {
 	defer cancel()
 
 	existing := addonOwned(newSubscriptionOnChannel("openshift-operators", common.PipelinesOperatorPackage, common.PipelinesOperatorPackage, "latest"))
-	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
+	b := &ClusterBootstrap{Client: newReadySubscriptionUpgradeClient(t, existing)}
 
 	if err := b.ensureOperator(ctx, testOperator(common.PipelinesOperatorPackage, "pipelines-1.23", "openshift-operators")); err != nil {
 		t.Fatalf("ensureOperator() error = %v", err)
@@ -508,7 +527,7 @@ func TestEnsureOperatorAppliesUnversionedRename(t *testing.T) {
 	defer cancel()
 
 	existing := addonOwned(newSubscriptionOnChannel("openshift-operators", common.PipelinesOperatorPackage, common.PipelinesOperatorPackage, "stable"))
-	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
+	b := &ClusterBootstrap{Client: newReadySubscriptionUpgradeClient(t, existing)}
 
 	if err := b.ensureOperator(ctx, testOperator(common.PipelinesOperatorPackage, "fast", "openshift-operators")); err != nil {
 		t.Fatalf("ensureOperator() error = %v", err)
@@ -527,7 +546,7 @@ func TestEnsureOperatorAppliesChannelUnderDifferentPrefix(t *testing.T) {
 	defer cancel()
 
 	existing := addonOwned(newSubscriptionOnChannel("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage, "stable-v1.5"))
-	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
+	b := &ClusterBootstrap{Client: newReadySubscriptionUpgradeClient(t, existing)}
 
 	if err := b.ensureOperator(ctx, testOperator(common.KueueOperatorPackage, "fast-v1.4", "openshift-kueue-operator")); err != nil {
 		t.Fatalf("ensureOperator() error = %v", err)
@@ -546,7 +565,7 @@ func TestEnsureOperatorUpgradesSubscriptionInAnotherNamespace(t *testing.T) {
 	defer cancel()
 
 	existing := addonOwned(newSubscriptionOnChannel("operators", "custom-name", common.KueueOperatorPackage, "stable-v1.3"))
-	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
+	b := &ClusterBootstrap{Client: newReadySubscriptionUpgradeClient(t, existing)}
 
 	if err := b.ensureOperator(ctx, testOperator(common.KueueOperatorPackage, "stable-v1.4", "openshift-kueue-operator")); err != nil {
 		t.Fatalf("ensureOperator() error = %v", err)
@@ -563,6 +582,22 @@ func TestEnsureOperatorUpgradesSubscriptionInAnotherNamespace(t *testing.T) {
 	}
 	if len(list.Items) != 1 {
 		t.Errorf("got %d subscriptions, want the existing one upgraded in place", len(list.Items))
+	}
+}
+
+func TestSubscriptionReadyWaitsForChannelProgress(t *testing.T) {
+	previousCurrentCSV := "operator.v1.0.0"
+	statuses := []olm.SubscriptionStatus{
+		{CurrentCSV: "operator.v1.0.0", InstalledCSV: "operator.v1.0.0"},
+		{CurrentCSV: "operator.v1.1.0", InstalledCSV: "operator.v1.0.0"},
+		{CurrentCSV: "operator.v1.1.0", InstalledCSV: "operator.v1.1.0"},
+	}
+	wantReady := []bool{false, false, true}
+
+	for i, status := range statuses {
+		if got := subscriptionReady(status, &previousCurrentCSV); got != wantReady[i] {
+			t.Errorf("subscriptionReady(%+v) = %t, want %t", status, got, wantReady[i])
+		}
 	}
 }
 
