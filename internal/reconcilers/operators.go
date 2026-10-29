@@ -76,12 +76,6 @@ type operator struct {
 	packageName string
 	channel     string
 	namespace   string
-
-	// channelPinned records that the channel was set on the controller's
-	// environment rather than falling back to the compiled-in default. An
-	// explicitly configured channel is an instruction, so it is applied even
-	// when it is not newer than the installed one; see upgradeSubscription.
-	channelPinned bool
 }
 
 // defaultOperators returns the operators the addon installs on the hub and on
@@ -96,22 +90,19 @@ type operator struct {
 func defaultOperators() []operator {
 	return []operator{
 		{
-			packageName:   common.PipelinesOperatorPackage,
-			channel:       common.GetPipelinesOperatorChannel(),
-			namespace:     common.GetPipelinesOperatorNamespace(),
-			channelPinned: common.IsEnvSet(common.PipelinesOperatorChannelEnv),
+			packageName: common.PipelinesOperatorPackage,
+			channel:     common.GetPipelinesOperatorChannel(),
+			namespace:   common.GetPipelinesOperatorNamespace(),
 		},
 		{
-			packageName:   common.KueueOperatorPackage,
-			channel:       common.GetKueueOperatorChannel(),
-			namespace:     common.GetKueueOperatorNamespace(),
-			channelPinned: common.IsEnvSet(common.KueueOperatorChannelEnv),
+			packageName: common.KueueOperatorPackage,
+			channel:     common.GetKueueOperatorChannel(),
+			namespace:   common.GetKueueOperatorNamespace(),
 		},
 		{
-			packageName:   common.CertManagerOperatorPackage,
-			channel:       common.GetCertManagerOperatorChannel(),
-			namespace:     common.GetCertManagerOperatorNamespace(),
-			channelPinned: common.IsEnvSet(common.CertManagerOperatorChannelEnv),
+			packageName: common.CertManagerOperatorPackage,
+			channel:     common.GetCertManagerOperatorChannel(),
+			namespace:   common.GetCertManagerOperatorNamespace(),
 		},
 	}
 }
@@ -215,15 +206,10 @@ func (c *ClusterBootstrap) findSubscription(ctx context.Context, packageName str
 //
 // A Subscription the addon did not install is always left untouched: that
 // operator belongs to whoever put it there, and its lifecycle is theirs to
-// manage. Beyond that, how far the addon will move a channel depends on where
-// the channel came from:
+// manage.
 //
-//   - A channel configured on the controller's environment is an explicit
-//     instruction and is applied as written, including a pin onto a channel
-//     that cannot be ordered against the installed one, such as "latest" to
-//     "pipelines-1.23", and a deliberate rollback.
-//   - The compiled-in default is applied only when it is demonstrably newer,
-//     so an unattended rollout never walks an operator backwards.
+// The configured channel is otherwise applied as written, the one exception
+// being a rollback within a release series. See shouldMoveChannel.
 func (c *ClusterBootstrap) upgradeSubscription(ctx context.Context, sub *olm.Subscription, op operator) error {
 	logger := log.FromContext(ctx)
 
@@ -237,27 +223,16 @@ func (c *ClusterBootstrap) upgradeSubscription(ctx context.Context, sub *olm.Sub
 		return nil
 	}
 
-	newer := channelIsNewer(sub.Spec.Channel, op.channel)
-
-	switch {
-	case !op.channelPinned && !newer:
-		logger.Info("Installed channel is not older than the default, leaving it alone",
+	if !shouldMoveChannel(sub.Spec.Channel, op.channel) {
+		logger.Info("Configured channel would roll the operator back, leaving it alone",
 			"subscription", sub.Name, "Namespace", sub.Namespace,
-			"installedChannel", sub.Spec.Channel, "defaultChannel", op.channel)
+			"installedChannel", sub.Spec.Channel, "configuredChannel", op.channel)
 		return nil
-
-	case op.channelPinned && !newer:
-		// Worth saying loudly: this is the one path that can move an operator
-		// sideways or backwards, and it only happens because someone asked.
-		logger.Info("Applying explicitly configured channel that is not newer than the installed one",
-			"subscription", sub.Name, "Namespace", sub.Namespace,
-			"from", sub.Spec.Channel, "to", op.channel)
-
-	default:
-		logger.Info("Upgrading operator to a newer channel",
-			"subscription", sub.Name, "Namespace", sub.Namespace,
-			"from", sub.Spec.Channel, "to", op.channel)
 	}
+
+	logger.Info("Moving operator onto the configured channel",
+		"subscription", sub.Name, "Namespace", sub.Namespace,
+		"from", sub.Spec.Channel, "to", op.channel)
 
 	patch := client.MergeFrom(sub.DeepCopy())
 	sub.Spec.Channel = op.channel

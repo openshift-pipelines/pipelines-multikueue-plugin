@@ -306,21 +306,13 @@ func unsetEnv(t *testing.T, envName string) {
 	}
 }
 
-// testOperator returns an operator whose channel came from the compiled-in
-// default, which is the unpinned, forward-only case.
+// testOperator returns an operator configured for a package, channel and
+// namespace, the way defaultOperators builds one.
 func testOperator(packageName, channel, namespace string) operator {
 	return operator{packageName: packageName, channel: channel, namespace: namespace}
 }
 
-// pinnedOperator returns an operator whose channel was set explicitly on the
-// controller's environment.
-func pinnedOperator(packageName, channel, namespace string) operator {
-	op := testOperator(packageName, channel, namespace)
-	op.channelPinned = true
-	return op
-}
-
-// newSubscriptionOnChannel returns an installed Subscription pinned to a
+// newSubscriptionOnChannel returns an installed Subscription sitting on a
 // specific channel.
 func newSubscriptionOnChannel(namespace, name, pkg, channel string) *olm.Subscription {
 	sub := newInstalledSubscription(namespace, name, pkg)
@@ -471,9 +463,9 @@ func TestEnsureOperatorDoesNotDowngradeOwnedSubscription(t *testing.T) {
 	}
 }
 
-// Channels that cannot be ordered against each other are left as they are,
-// rather than guessed at.
-func TestEnsureOperatorKeepsIncomparableChannel(t *testing.T) {
+// An unversioned channel cannot be behind a numbered one, so moving a named
+// release back onto "latest" is applied like any other configured channel.
+func TestEnsureOperatorAppliesUnversionedDesiredChannel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -485,102 +477,66 @@ func TestEnsureOperatorKeepsIncomparableChannel(t *testing.T) {
 	}
 
 	sub := getSubscription(t, b.Client, "openshift-operators", common.PipelinesOperatorPackage)
-	if sub.Spec.Channel != "pipelines-1.19" {
-		t.Errorf("channel = %q, want the incomparable %q left alone", sub.Spec.Channel, "pipelines-1.19")
+	if sub.Spec.Channel != "latest" {
+		t.Errorf("channel = %q, want the subscription moved to %q", sub.Spec.Channel, "latest")
 	}
 }
 
-// A channel set on the controller's environment is an instruction, so it is
-// applied even across the `latest` / `pipelines-1.x` boundary, where neither
-// side can be ordered against the other.
-func TestEnsureOperatorAppliesPinnedIncomparableChannel(t *testing.T) {
+// Moving off an unversioned channel onto a named release is an upgrade, even
+// though the two channel names share no prefix.
+func TestEnsureOperatorUpgradesFromUnversionedChannel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	existing := addonOwned(newSubscriptionOnChannel("openshift-operators", common.PipelinesOperatorPackage, common.PipelinesOperatorPackage, "latest"))
 	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
 
-	if err := b.ensureOperator(ctx, pinnedOperator(common.PipelinesOperatorPackage, "pipelines-1.23", "openshift-operators")); err != nil {
+	if err := b.ensureOperator(ctx, testOperator(common.PipelinesOperatorPackage, "pipelines-1.23", "openshift-operators")); err != nil {
 		t.Fatalf("ensureOperator() error = %v", err)
 	}
 
 	sub := getSubscription(t, b.Client, "openshift-operators", common.PipelinesOperatorPackage)
 	if sub.Spec.Channel != "pipelines-1.23" {
-		t.Errorf("channel = %q, want the pin to %q applied", sub.Spec.Channel, "pipelines-1.23")
+		t.Errorf("channel = %q, want the subscription moved to %q", sub.Spec.Channel, "pipelines-1.23")
 	}
 }
 
-// Rolling an operator back is only ever allowed when someone asked for that
-// exact channel.
-func TestEnsureOperatorAppliesPinnedRollback(t *testing.T) {
+// Neither side of a rename between unversioned channels carries a version, so
+// there is no version to be behind and the configured channel is applied.
+func TestEnsureOperatorAppliesUnversionedRename(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	existing := addonOwned(newSubscriptionOnChannel("openshift-operators", common.PipelinesOperatorPackage, common.PipelinesOperatorPackage, "stable"))
+	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
+
+	if err := b.ensureOperator(ctx, testOperator(common.PipelinesOperatorPackage, "fast", "openshift-operators")); err != nil {
+		t.Fatalf("ensureOperator() error = %v", err)
+	}
+
+	sub := getSubscription(t, b.Client, "openshift-operators", common.PipelinesOperatorPackage)
+	if sub.Spec.Channel != "fast" {
+		t.Errorf("channel = %q, want the subscription moved to %q", sub.Spec.Channel, "fast")
+	}
+}
+
+// Versions under different prefixes number unrelated series, so a lower
+// number across a rename is not a rollback and the move is applied.
+func TestEnsureOperatorAppliesChannelUnderDifferentPrefix(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	existing := addonOwned(newSubscriptionOnChannel("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage, "stable-v1.5"))
 	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
 
-	if err := b.ensureOperator(ctx, pinnedOperator(common.KueueOperatorPackage, "stable-v1.4", "openshift-kueue-operator")); err != nil {
+	if err := b.ensureOperator(ctx, testOperator(common.KueueOperatorPackage, "fast-v1.4", "openshift-kueue-operator")); err != nil {
 		t.Fatalf("ensureOperator() error = %v", err)
 	}
 
 	sub := getSubscription(t, b.Client, "openshift-kueue-operator", common.KueueOperatorPackage)
-	if sub.Spec.Channel != "stable-v1.4" {
-		t.Errorf("channel = %q, want the pinned rollback to %q applied", sub.Spec.Channel, "stable-v1.4")
+	if sub.Spec.Channel != "fast-v1.4" {
+		t.Errorf("channel = %q, want the subscription moved to %q", sub.Spec.Channel, "fast-v1.4")
 	}
-}
-
-// Pinning does not override ownership: an operator the cluster already had
-// still belongs to whoever installed it.
-func TestEnsureOperatorPinDoesNotTouchForeignSubscription(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	existing := newSubscriptionOnChannel("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage, "stable-v1.3")
-	b := &ClusterBootstrap{Client: newFakeClient(t, existing)}
-
-	if err := b.ensureOperator(ctx, pinnedOperator(common.KueueOperatorPackage, "stable-v1.4", "openshift-kueue-operator")); err != nil {
-		t.Fatalf("ensureOperator() error = %v", err)
-	}
-
-	sub := getSubscription(t, b.Client, "openshift-kueue-operator", common.KueueOperatorPackage)
-	if sub.Spec.Channel != "stable-v1.3" {
-		t.Errorf("channel = %q, want the pre-existing %q left alone", sub.Spec.Channel, "stable-v1.3")
-	}
-}
-
-// defaultOperators must mark a channel as pinned exactly when its environment
-// variable is set, since that flag is what unlocks the sideways moves above.
-func TestDefaultOperatorsMarksConfiguredChannelsAsPinned(t *testing.T) {
-	channelEnvs := []string{
-		common.PipelinesOperatorChannelEnv,
-		common.KueueOperatorChannelEnv,
-		common.CertManagerOperatorChannelEnv,
-	}
-
-	t.Run("unset channels are not pinned", func(t *testing.T) {
-		for _, env := range channelEnvs {
-			unsetEnv(t, env)
-		}
-		for _, op := range defaultOperators() {
-			if op.channelPinned {
-				t.Errorf("%s: channelPinned = true, want false for a compiled-in default", op.packageName)
-			}
-		}
-	})
-
-	t.Run("only the configured channel is pinned", func(t *testing.T) {
-		for _, env := range channelEnvs {
-			unsetEnv(t, env)
-		}
-		t.Setenv(common.KueueOperatorChannelEnv, "stable-v1.5")
-
-		for _, op := range defaultOperators() {
-			want := op.packageName == common.KueueOperatorPackage
-			if op.channelPinned != want {
-				t.Errorf("%s: channelPinned = %v, want %v", op.packageName, op.channelPinned, want)
-			}
-		}
-	})
 }
 
 // The subscription the addon adopted lives under a non-default name, so the

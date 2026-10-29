@@ -12,23 +12,30 @@ import (
 // that does not end in a version, such as "latest", does not match.
 var channelVersionRE = regexp.MustCompile(`^(.*?)(\d+(?:\.\d+)*)$`)
 
-// channelIsNewer reports whether the desired channel tracks a higher operator
-// version than the installed one.
+// shouldMoveChannel reports whether the addon should move an operator from the
+// channel it is installed on onto the desired one.
 //
-// Only channels sharing a prefix and ending in a dotted version can be
-// compared, so "stable-v1" to "stable-v1.4" is an upgrade while "latest" or a
-// rename such as "stable" to "fast" is not. Anything that cannot be compared is
-// reported as not newer: leaving an operator on its current channel is always
-// safer than moving it to one that may turn out to be older.
-func channelIsNewer(installed, desired string) bool {
+// The configured channel is an instruction and is applied, with one exception:
+// the addon will not walk an operator backwards through a release series. That
+// means a rollback is refused only when both channels carry a version under
+// the same prefix and the desired version is the lower of the two, as in
+// "stable-v1.5" to "stable-v1.4".
+//
+// Everything else moves. Versions under different prefixes, such as
+// "stable-v1.4" to "fast-v1.5", number unrelated series and say nothing about
+// which release is older, so there is no rollback to refuse. The same goes for
+// a channel carrying no version at all, such as "latest" or a rename from
+// "stable" to "fast".
+func shouldMoveChannel(installed, desired string) bool {
 	installedPrefix, installedVersion := parseChannel(installed)
 	desiredPrefix, desiredVersion := parseChannel(desired)
 
+	// Only two versions in the same series can be ordered against each other.
 	if installedVersion == nil || desiredVersion == nil || installedPrefix != desiredPrefix {
-		return false
+		return true
 	}
 
-	return compareVersions(desiredVersion, installedVersion) > 0
+	return compareVersions(desiredVersion, installedVersion) >= 0
 }
 
 // parseChannel returns the channel's prefix and its trailing version. The

@@ -107,13 +107,6 @@ func GetEnvOrDefault(envName, defaultValue string) string {
 	return defaultValue
 }
 
-// IsEnvSet reports whether envName carries a value, which distinguishes a
-// setting someone configured deliberately from one that fell back to its
-// compiled-in default.
-func IsEnvSet(envName string) bool {
-	return os.Getenv(envName) != ""
-}
-
 // Get MultiKueue Kubeconfig Secret name
 func GetMultiKueueSecretName(clusterName string) string {
 	return fmt.Sprintf("%s-%s", MultiKueueResourceName, clusterName)

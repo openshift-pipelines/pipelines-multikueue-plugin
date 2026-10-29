@@ -144,31 +144,36 @@ Create a `LocalQueue` pointing to `pipelines-multicluster-kueue` before submitti
 
 ## Operator upgrades
 
-Each reconcile compares the channel of every operator Subscription against the default channel in the table below. When the default is newer, the controller moves the Subscription onto it and OLM performs the upgrade. It then waits for `status.installedCSV` to catch up with `status.currentCSV` before continuing.
+Each reconcile compares the channel of every operator Subscription against the configured channel (see [Defaults](#defaults)). When the two differ, the controller moves the Subscription onto the configured channel and OLM performs the upgrade. It then waits for `status.installedCSV` to catch up with `status.currentCSV` before continuing.
 
 **Only the controller's own operators are touched.** A Subscription it created carries the label `app.kubernetes.io/managed-by: pipelines-multikueue-plugin`. If an operator was already on the cluster when the controller arrived, or was installed by someone else, its channel is left alone and its lifecycle stays with whoever owns it. The controller stamps the same label on the namespaces and `OperatorGroups` it creates. This holds unconditionally — nothing below overrides it.
 
 A Kubernetes `ownerReference` cannot express this, because the controller runs on the hub while most of these resources live on a managed cluster, and an `ownerReference` only resolves inside one cluster.
 
-Beyond ownership, how far the controller will move a channel depends on where that channel came from:
+**The configured channel is applied, with one exception: the controller will not roll an operator back through a release series.** That is the only move it refuses, and it only applies when both channels carry a version under the same prefix:
 
-| Channel source | Behaviour |
-| --- | --- |
-| Compiled-in default (env var unset) | Applied **only when demonstrably newer**, so an unattended rollout never walks an operator backwards. |
-| Set on the Deployment (env var present) | Applied **exactly as written** — including a pin, a sideways move, or a rollback. |
+| Installed channel | Configured channel | Result | Why |
+| --- | --- | --- | --- |
+| `stable-v1.5` | `stable-v1.4` | **left alone** | Same prefix, lower version — a rollback. |
+| `stable-v1.4` | `stable-v1` | **left alone** | Also a rollback: `1` is behind `1.4`. |
+| `stable-v1` | `stable-v1.4` | moved | Same prefix, higher version. `stable-v1.9` to `stable-v1.10` counts as forward too. |
+| `stable-v1.4` | `fast-v1.5` | moved | Different prefixes: the two versions number unrelated series, so neither is behind the other. |
+| `stable-v1.5` | `fast-v1.4` | moved | Same reason — a lower number across a rename is not a rollback. |
+| `latest` | `pipelines-1.23` | moved | The installed channel carries no version, so it cannot be ahead of anything. |
+| `pipelines-1.23` | `latest` | moved | The configured channel carries no version, so it cannot be behind anything. |
+| `stable` | `fast` | moved | Neither side carries a version. A rename is followed. |
 
-A channel counts as newer only when it shares a prefix with the installed one and ends in a higher dotted version, so `stable-v1` to `stable-v1.4` is an upgrade and `stable-v1.9` to `stable-v1.10` is too. Channels that cannot be ordered against each other — `latest` versus `pipelines-1.23`, or a rename such as `stable` to `fast` — are not comparable, and the automatic path leaves them alone.
+In short: a version number is only ever allowed to go up within its own series. Everything else is applied as configured.
 
-Setting the variable is what distinguishes a deliberate choice from a default, so pinning works even across that boundary:
+Pointing an operator at a different release is a matter of setting its channel on the Deployment:
 
 ```sh
-# Pin Pipelines to a specific release, even if it is currently on `latest`.
 kubectl set env deployment/pipelines-multikueue-plugin-controller \
   -n tekton-kueue \
   PIPELINES_OPERATOR_CHANNEL=pipelines-1.23
 ```
 
-The controller reads its environment on every reconcile, so this takes effect as soon as the new pod is running. A pin that moves an operator sideways or backwards is logged as such. Clear the variable to hand the operator back to the forward-only default.
+The controller reads its environment on every reconcile, so this takes effect as soon as the new pod is running. Rolling a version number back within its series is the one thing this cannot do; that has to be done by editing the Subscription directly.
 
 Operators installed by an earlier run of the controller already carry the ownership label, so they are picked up on the next reconcile.
 
