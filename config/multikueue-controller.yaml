@@ -34,6 +34,23 @@ spec:
         image: controller:latest
         imagePullPolicy: Always
         name: controller
+        # The operator channels and namespaces below are compiled into the
+        # image. To pin or upgrade one without rebuilding, change env: [] to
+        # env: and uncomment the desired name/value pairs below. The controller
+        # reads them on every reconcile.
+        env: []
+        # - name: PIPELINES_OPERATOR_CHANNEL
+        #   value: pipelines-1.22
+        # - name: KUEUE_OPERATOR_CHANNEL
+        #   value: stable-v1.4
+        # - name: CERT_MANAGER_OPERATOR_CHANNEL
+        #   value: stable-v1
+        # - name: PIPELINES_OPERATOR_NAMESPACE
+        #   value: openshift-operators
+        # - name: KUEUE_NAMESPACE
+        #   value: openshift-kueue-operator
+        # - name: CERT_MANAGER_OPERATOR_NAMESPACE
+        #   value: cert-manager-operator
         ports:
         - containerPort: 8443
           name: metrics-server
