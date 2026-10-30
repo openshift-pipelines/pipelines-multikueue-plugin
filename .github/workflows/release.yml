@@ -61,8 +61,8 @@ jobs:
 
           # Highest existing patch number for a vX.Y series, empty if none.
           latest_patch() {
-            git tag --list "release-$1.*" \
-              | sed -n "s/^release-$1\.\([0-9][0-9]*\)$/\1/p" \
+            git tag --list "$1.*" \
+              | sed -n "s/^$1\.\([0-9][0-9]*\)$/\1/p" \
               | sort -n \
               | tail -1
           }
@@ -81,7 +81,7 @@ jobs:
             if [[ -z "${previous}" ]]; then
               patch=0
             else
-              tag="release-${series}.${previous}"
+              tag="${series}.${previous}"
               if [[ "${FORCE}" != "true" ]] \
                 && [[ "$(git rev-list --count "${tag}..origin/${branch}")" -eq 0 ]]; then
                 echo "  skip ${branch}: no commits since ${tag}" >&2
@@ -93,7 +93,7 @@ jobs:
             jq -nc \
               --arg ref "${branch}" \
               --arg version "${series}.${patch}" \
-              --arg tag "release-${series}.${patch}" \
+              --arg tag "${series}.${patch}" \
               '{ref: $ref, version: $version, tag: $tag, kind: "release"}'
           }
 
