@@ -586,7 +586,7 @@ func TestEnsureOperatorUpgradesSubscriptionInAnotherNamespace(t *testing.T) {
 }
 
 func TestSubscriptionReadyWaitsForChannelProgress(t *testing.T) {
-	previousCurrentCSV := "operator.v1.0.0"
+	previousStatus := &olm.SubscriptionStatus{CurrentCSV: "operator.v1.0.0"}
 	statuses := []olm.SubscriptionStatus{
 		{CurrentCSV: "operator.v1.0.0", InstalledCSV: "operator.v1.0.0"},
 		{CurrentCSV: "operator.v1.1.0", InstalledCSV: "operator.v1.0.0"},
@@ -595,9 +595,45 @@ func TestSubscriptionReadyWaitsForChannelProgress(t *testing.T) {
 	wantReady := []bool{false, false, true}
 
 	for i, status := range statuses {
-		if got := subscriptionReady(status, &previousCurrentCSV); got != wantReady[i] {
+		if got := subscriptionReady(status, previousStatus); got != wantReady[i] {
 			t.Errorf("subscriptionReady(%+v) = %t, want %t", status, got, wantReady[i])
 		}
+	}
+}
+
+func TestSubscriptionReadyAcceptsRefreshedUnchangedCSV(t *testing.T) {
+	lastUpdated := metav1.NewTime(time.Now())
+	previousStatus := &olm.SubscriptionStatus{
+		CurrentCSV:  "operator.v1.0.0",
+		LastUpdated: lastUpdated,
+	}
+	status := olm.SubscriptionStatus{
+		CurrentCSV:   "operator.v1.0.0",
+		InstalledCSV: "operator.v1.0.0",
+		State:        olm.SubscriptionStateAtLatest,
+		LastUpdated:  metav1.NewTime(lastUpdated.Add(time.Second)),
+	}
+
+	if got := subscriptionReady(status, previousStatus); !got {
+		t.Errorf("subscriptionReady(%+v) = false, want true for a refreshed at-latest status with an unchanged CSV", status)
+	}
+}
+
+func TestSubscriptionReadyRejectsUnrefreshedUnchangedCSV(t *testing.T) {
+	lastUpdated := metav1.NewTime(time.Now())
+	previousStatus := &olm.SubscriptionStatus{
+		CurrentCSV:  "operator.v1.0.0",
+		LastUpdated: lastUpdated,
+	}
+	status := olm.SubscriptionStatus{
+		CurrentCSV:   "operator.v1.0.0",
+		InstalledCSV: "operator.v1.0.0",
+		State:        olm.SubscriptionStateAtLatest,
+		LastUpdated:  lastUpdated,
+	}
+
+	if got := subscriptionReady(status, previousStatus); got {
+		t.Errorf("subscriptionReady(%+v) = true, want false until OLM refreshes status after the channel change", status)
 	}
 }
 
