@@ -174,18 +174,17 @@ func (c *ClusterBootstrap) ensureOperator(ctx context.Context, op operator) erro
 		logger.Info("Subscription found", "Package", op.packageName, "subscription", existing.Name, "Namespace", existing.Namespace)
 
 		previousChannel := ""
+		beforeUpgradeStatus := existing.Status
 		if existing.Spec != nil {
 			previousChannel = existing.Spec.Channel
 		}
 		if err := c.upgradeSubscription(ctx, existing, op); err != nil {
 			return err
 		}
-		// Only wait for OLM to pick a different CSV when there was one to
-		// begin with. A Subscription whose status has not published a
-		// CurrentCSV yet can never report a value "different from empty", so
-		// arming the guard on it would block until the poll times out.
-		if existing.Spec != nil && existing.Spec.Channel != previousChannel && existing.Status.CurrentCSV != "" {
-			previousStatus = &existing.Status
+		// Use the pre-patch status as the baseline; Patch refreshes existing.
+		// Only arm the progress guard when that baseline has a CurrentCSV.
+		if existing.Spec != nil && existing.Spec.Channel != previousChannel && beforeUpgradeStatus.CurrentCSV != "" {
+			previousStatus = &beforeUpgradeStatus
 		}
 	}
 
