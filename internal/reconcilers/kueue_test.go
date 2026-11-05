@@ -484,7 +484,7 @@ func TestEnsureAdmissionCheck(t *testing.T) {
 func TestEnsureMultiKueueCluster(t *testing.T) {
 	ctx := context.Background()
 	r := &MultiKueueReconciler{Client: newFakeClient(t)}
-	secret := newSecret(common.KueueNamespace, "cluster1", nil)
+	secret := newSecret(common.GetKueueOperatorNamespace(), "cluster1", nil)
 
 	if err := r.ensureMultiKueueCluster(ctx, "cluster1", secret); err != nil {
 		t.Fatalf("ensureMultiKueueCluster() error = %v", err)
@@ -518,7 +518,7 @@ func TestEnsureMultiKueueClusterAccumulatesClusters(t *testing.T) {
 	r := &MultiKueueReconciler{Client: newFakeClient(t)}
 
 	for _, name := range []string{"cluster1", "cluster2", "cluster1"} {
-		secret := newSecret(common.KueueNamespace, name, nil)
+		secret := newSecret(common.GetKueueOperatorNamespace(), name, nil)
 		if err := r.ensureMultiKueueCluster(ctx, name, secret); err != nil {
 			t.Fatalf("ensureMultiKueueCluster(%q) error = %v", name, err)
 		}
@@ -605,7 +605,7 @@ func TestEnsureKubeConfigSecretNoClientConfigs(t *testing.T) {
 
 func TestEnsureKubeConfigSecretUpdatesExisting(t *testing.T) {
 	ctx := context.Background()
-	existing := newSecret(common.KueueNamespace, "cluster1", map[string][]byte{
+	existing := newSecret(common.GetKueueOperatorNamespace(), "cluster1", map[string][]byte{
 		"kubeconfig": []byte("stale"),
 	})
 	existing.Labels = map[string]string{"keep-me": "yes"}
