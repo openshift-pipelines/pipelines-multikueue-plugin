@@ -344,6 +344,31 @@ type readySubscriptionUpgradeClient struct {
 	client.Client
 }
 
+type refreshedSubscriptionPatchClient struct {
+	client.Client
+	lastUpdated metav1.Time
+}
+
+func (c refreshedSubscriptionPatchClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := c.Client.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	if sub, ok := obj.(*olm.Subscription); ok {
+		sub.Status.LastUpdated = c.lastUpdated
+	}
+	return nil
+}
+
+func (c refreshedSubscriptionPatchClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if err := c.Client.Patch(ctx, obj, patch, opts...); err != nil {
+		return err
+	}
+	if sub, ok := obj.(*olm.Subscription); ok {
+		sub.Status.LastUpdated = c.lastUpdated
+	}
+	return nil
+}
+
 func (c readySubscriptionUpgradeClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	if err := c.Client.Get(ctx, key, obj, opts...); err != nil {
 		return err
@@ -555,6 +580,29 @@ func TestEnsureOperatorAppliesChannelUnderDifferentPrefix(t *testing.T) {
 	sub := getSubscription(t, b.Client, "openshift-kueue-operator", common.KueueOperatorPackage)
 	if sub.Spec.Channel != "fast-v1.4" {
 		t.Errorf("channel = %q, want the subscription moved to %q", sub.Spec.Channel, "fast-v1.4")
+	}
+}
+
+func TestEnsureOperatorDoesNotTreatPatchResponseStatusAsUpgradeProgress(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	refreshedAt := metav1.NewTime(time.Now())
+	existing := addonOwned(newSubscriptionOnChannel("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage, "stable-v1.3"))
+	existing.Status.CurrentCSV = "operator.v1.0.0"
+	existing.Status.InstalledCSV = "operator.v1.0.0"
+	existing.Status.State = olm.SubscriptionStateAtLatest
+	existing.Status.LastUpdated = metav1.NewTime(refreshedAt.Add(-time.Second))
+
+	baseClient := newFakeClient(t, existing)
+	b := &ClusterBootstrap{Client: refreshedSubscriptionPatchClient{
+		Client:      baseClient,
+		lastUpdated: refreshedAt,
+	}}
+
+	err := b.ensureOperator(ctx, testOperator(common.KueueOperatorPackage, "stable-v1.4", "openshift-kueue-operator"))
+	if err == nil {
+		t.Fatal("ensureOperator() returned nil, want it to keep waiting for OLM to process the channel change")
 	}
 }
 

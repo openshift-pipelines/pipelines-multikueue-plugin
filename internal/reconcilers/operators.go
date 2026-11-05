@@ -181,9 +181,11 @@ func (c *ClusterBootstrap) ensureOperator(ctx context.Context, op operator) erro
 		if err := c.upgradeSubscription(ctx, existing, op); err != nil {
 			return err
 		}
-		// Use the pre-patch status as the baseline; Patch refreshes existing.
-		// Only arm the progress guard when that baseline has a CurrentCSV.
+		// Keep the pre-patch CSV as the baseline, but use the status returned
+		// by Patch so a refresh that predates the channel change cannot count
+		// as OLM processing it.
 		if existing.Spec != nil && existing.Spec.Channel != previousChannel && beforeUpgradeStatus.CurrentCSV != "" {
+			beforeUpgradeStatus.LastUpdated = existing.Status.LastUpdated
 			previousStatus = &beforeUpgradeStatus
 		}
 	}
