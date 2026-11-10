@@ -1,6 +1,6 @@
 module github.com/openshift-pipelines/pipelines-multikueue-plugin
 
-go 1.26.5
+go 1.26.10
 
 require (
 	github.com/openshift/api v0.0.0-20260715165912-72066cc9718b
