@@ -383,7 +383,7 @@ func (r *MultiKueueReconciler) ensureKubeConfigSecret(
 
 	target := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: common.KueueNamespace,
+			Namespace: common.GetKueueOperatorNamespace(),
 			Name:      cluster.Name,
 		},
 	}
