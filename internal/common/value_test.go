@@ -133,6 +133,12 @@ func TestIsClusterProfileEnabled(t *testing.T) {
 	runBoolEnvTests(t, EnableClusterProfileEnv, IsClusterProfileEnabled)
 }
 
+// A hub is only subscribed to the Pipelines operator when it is switched on
+// explicitly, so anything other than "true" leaves it off.
+func TestIsPipelinesOnHubEnabled(t *testing.T) {
+	runBoolEnvTests(t, InstallPipelinesOnHubEnv, IsPipelinesOnHubEnabled)
+}
+
 // runBoolEnvTests exercises a predicate that is true only when envName is
 // exactly "true".
 func runBoolEnvTests(t *testing.T, envName string, fn func() bool) {

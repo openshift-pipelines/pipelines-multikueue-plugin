@@ -198,6 +198,21 @@ Operator channels and namespaces are read from the controller's environment on e
 | OpenShift Pipelines namespace | `PIPELINES_OPERATOR_NAMESPACE` | `openshift-operators` |
 | Kueue namespace | `KUEUE_NAMESPACE` | `openshift-kueue-operator` |
 | cert-manager namespace | `CERT_MANAGER_OPERATOR_NAMESPACE` | `cert-manager-operator` |
+| Install Pipelines on the hub | `INSTALL_PIPELINES_ON_HUB` | unset (off) |
+
+### Which operators go where
+
+The Kueue and cert-manager operators are installed on the hub and on every managed cluster.
+
+The OpenShift Pipelines operator is installed on managed clusters, which are where the PipelineRuns Kueue admits actually run. A hub is only subscribed to it when `INSTALL_PIPELINES_ON_HUB` is set to exactly `true`:
+
+```sh
+kubectl set env deployment/pipelines-multikueue-plugin-controller \
+  -n tekton-kueue \
+  INSTALL_PIPELINES_ON_HUB=true
+```
+
+The opt-in only covers installing the operator where the package is not subscribed to at all. A hub that already has OpenShift Pipelines keeps the Subscription it has, wherever it lives and whatever channel it is on, and no second one is created.
 
 | Setting | Default                                  |
 | --- |------------------------------------------|

@@ -3,6 +3,7 @@ package reconcilers
 import (
 	"context"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -162,21 +163,124 @@ func newInstalledSubscription(namespace, name, pkg string) *olm.Subscription {
 	}
 }
 
+// hubRole is the ClusterRole a hub carries: none at all. Naming it keeps the
+// allOperators calls below readable next to ClusterRoleSpoke.
+const hubRole = ""
+
 // operatorFor returns the entry for packageName, failing the test when the
-// addon does not install that operator at all.
+// addon does not install that operator at all. A spoke is subscribed to every
+// operator the addon knows about, so that role resolves the whole table.
 func operatorFor(t *testing.T, packageName string) operator {
 	t.Helper()
 
-	for _, op := range defaultOperators() {
+	return findOperator(t, allOperators(ClusterRoleSpoke), packageName)
+}
+
+// findOperator returns the entry for packageName in ops, failing the test when
+// the table does not carry it.
+func findOperator(t *testing.T, ops []operator, packageName string) operator {
+	t.Helper()
+
+	for _, op := range ops {
 		if op.packageName == packageName {
 			return op
 		}
 	}
-	t.Fatalf("%q is not one of the operators the addon installs", packageName)
+	t.Fatalf("%q is not among %v", packageName, packageNames(ops))
 	return operator{}
 }
 
-func TestDefaultOperatorsFallsBackToBuiltInChannels(t *testing.T) {
+// packageNames lists the packages in an operator table, for comparing it
+// against the operators a cluster role is meant to get.
+func packageNames(ops []operator) []string {
+	names := make([]string, 0, len(ops))
+	for _, op := range ops {
+		names = append(names, op.packageName)
+	}
+	return names
+}
+
+// Kueue and cert-manager are installed whatever the cluster's role is.
+func TestAllOperatorsCoverEveryRole(t *testing.T) {
+	unsetEnv(t, common.InstallPipelinesOnHubEnv)
+
+	for _, role := range []struct{ name, role string }{
+		{"hub", hubRole},
+		{"spoke", ClusterRoleSpoke},
+	} {
+		t.Run(role.name, func(t *testing.T) {
+			got := packageNames(allOperators(role.role))
+
+			for _, want := range []string{common.KueueOperatorPackage, common.CertManagerOperatorPackage} {
+				if !slices.Contains(got, want) {
+					t.Errorf("allOperators(%q) = %v, want it to include %q", role.role, got, want)
+				}
+			}
+		})
+	}
+}
+
+// A spoke runs the PipelineRuns Kueue admits, so it is subscribed to the
+// Pipelines operator whether or not the hub opt-in is set.
+func TestAllOperatorsInstallsPipelinesOnSpoke(t *testing.T) {
+	unsetEnv(t, common.InstallPipelinesOnHubEnv)
+
+	want := []string{
+		common.KueueOperatorPackage,
+		common.CertManagerOperatorPackage,
+		common.PipelinesOperatorPackage,
+	}
+	if got := packageNames(allOperators(ClusterRoleSpoke)); !slices.Equal(got, want) {
+		t.Errorf("allOperators(%q) = %v, want %v", ClusterRoleSpoke, got, want)
+	}
+}
+
+// A hub is left without the Pipelines operator unless it is switched on.
+func TestAllOperatorsSkipsPipelinesOnHub(t *testing.T) {
+	unsetEnv(t, common.InstallPipelinesOnHubEnv)
+
+	if got := packageNames(allOperators(hubRole)); slices.Contains(got, common.PipelinesOperatorPackage) {
+		t.Errorf("allOperators(hub) = %v, want no Pipelines operator while %s is unset", got, common.InstallPipelinesOnHubEnv)
+	}
+}
+
+// Switched on, a hub gets the Pipelines operator with the same channel and
+// namespace a spoke uses, both still read from the environment.
+func TestAllOperatorsInstallsPipelinesOnHubWhenEnabled(t *testing.T) {
+	t.Setenv(common.InstallPipelinesOnHubEnv, "true")
+	t.Setenv(common.PipelinesOperatorChannelEnv, "pipelines-1.21")
+	t.Setenv(common.PipelinesOperatorNamespaceEnv, "pipelines-operators")
+
+	got := findOperator(t, allOperators(hubRole), common.PipelinesOperatorPackage)
+	if got.channel != "pipelines-1.21" {
+		t.Errorf("channel = %q, want the environment override %q", got.channel, "pipelines-1.21")
+	}
+	if got.namespace != "pipelines-operators" {
+		t.Errorf("namespace = %q, want the environment override %q", got.namespace, "pipelines-operators")
+	}
+}
+
+// Anything other than "true" leaves the hub alone, so a typo in the
+// Deployment cannot quietly subscribe it to an operator.
+func TestAllOperatorsIgnoresNonTrueOptIn(t *testing.T) {
+	t.Setenv(common.InstallPipelinesOnHubEnv, "yes")
+
+	if got := packageNames(allOperators(hubRole)); slices.Contains(got, common.PipelinesOperatorPackage) {
+		t.Errorf("allOperators(hub) = %v, want no Pipelines operator for a non-\"true\" opt-in", got)
+	}
+}
+
+// The opt-in only covers the hub. A spoke is subscribed to the Pipelines
+// operator regardless, so switching it off must not strip it from a spoke.
+func TestAllOperatorsOptInDoesNotAffectSpoke(t *testing.T) {
+	t.Setenv(common.InstallPipelinesOnHubEnv, "false")
+
+	if got := packageNames(allOperators(ClusterRoleSpoke)); !slices.Contains(got, common.PipelinesOperatorPackage) {
+		t.Errorf("allOperators(%q) = %v, want the Pipelines operator kept on a spoke", ClusterRoleSpoke, got)
+	}
+}
+
+func TestAllOperatorsFallsBackToBuiltInChannels(t *testing.T) {
 	for _, env := range []string{
 		common.PipelinesOperatorChannelEnv,
 		common.KueueOperatorChannelEnv,
@@ -198,7 +302,7 @@ func TestDefaultOperatorsFallsBackToBuiltInChannels(t *testing.T) {
 	}
 }
 
-func TestDefaultOperatorsReadsChannelsFromEnv(t *testing.T) {
+func TestAllOperatorsReadsChannelsFromEnv(t *testing.T) {
 	for _, tc := range []struct{ env, packageName, channel string }{
 		{common.PipelinesOperatorChannelEnv, common.PipelinesOperatorPackage, "pipelines-1.20"},
 		{common.KueueOperatorChannelEnv, common.KueueOperatorPackage, "stable-v1.5"},
@@ -216,7 +320,7 @@ func TestDefaultOperatorsReadsChannelsFromEnv(t *testing.T) {
 
 // An empty override is treated as no override, so a blank value in the
 // Deployment cannot leave an operator subscribed to no channel at all.
-func TestDefaultOperatorsIgnoresEmptyChannelOverride(t *testing.T) {
+func TestAllOperatorsIgnoresEmptyChannelOverride(t *testing.T) {
 	t.Setenv(common.KueueOperatorChannelEnv, "")
 
 	if got := operatorFor(t, common.KueueOperatorPackage).channel; got != common.DefaultKueueOperatorChannel {
@@ -224,7 +328,7 @@ func TestDefaultOperatorsIgnoresEmptyChannelOverride(t *testing.T) {
 	}
 }
 
-func TestDefaultOperatorsFallsBackToBuiltInNamespaces(t *testing.T) {
+func TestAllOperatorsFallsBackToBuiltInNamespaces(t *testing.T) {
 	for _, env := range []string{
 		common.KueueNamespaceEnv,
 		common.PipelinesOperatorNamespaceEnv,
@@ -246,7 +350,7 @@ func TestDefaultOperatorsFallsBackToBuiltInNamespaces(t *testing.T) {
 	}
 }
 
-func TestDefaultOperatorsReadsNamespacesFromEnv(t *testing.T) {
+func TestAllOperatorsReadsNamespacesFromEnv(t *testing.T) {
 	for _, tc := range []struct{ env, packageName, namespace string }{
 		{common.PipelinesOperatorNamespaceEnv, common.PipelinesOperatorPackage, "pipelines-operators"},
 		{common.KueueNamespaceEnv, common.KueueOperatorPackage, "kueue-system"},
@@ -307,7 +411,7 @@ func unsetEnv(t *testing.T, envName string) {
 }
 
 // testOperator returns an operator configured for a package, channel and
-// namespace, the way defaultOperators builds one.
+// namespace, the way allOperators builds one.
 func testOperator(packageName, channel, namespace string) operator {
 	return operator{packageName: packageName, channel: channel, namespace: namespace}
 }
@@ -754,6 +858,160 @@ func TestEnsureOperators(t *testing.T) {
 	}
 }
 
+// A cluster with no Spoke role gets the default operators only, and no
+// Pipelines subscription is created there unless the hub opts in.
+func TestEnsureOperatorsSkipsPipelinesOnHub(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	unsetEnv(t, common.InstallPipelinesOnHubEnv)
+
+	b := &ClusterBootstrap{Client: newFakeClient(t,
+		newInstalledSubscription("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage),
+		newInstalledSubscription("cert-manager-operator", common.CertManagerOperatorPackage, common.CertManagerOperatorPackage),
+	)}
+	if b.ClusterRole == ClusterRoleSpoke {
+		t.Fatalf("test setup: ClusterRole = %q, want it unset", b.ClusterRole)
+	}
+
+	if err := b.ensureOperators(ctx); err != nil {
+		t.Fatalf("ensureOperators() error = %v", err)
+	}
+
+	if sub, err := b.findSubscription(ctx, common.PipelinesOperatorPackage); err != nil {
+		t.Fatalf("failed to look up the Pipelines subscription: %v", err)
+	} else if sub != nil {
+		t.Errorf("Pipelines subscription %s/%s was created on the hub, want it left to the opt-in", sub.Namespace, sub.Name)
+	}
+
+	list := &olm.SubscriptionList{}
+	if err := b.List(ctx, list); err != nil {
+		t.Fatalf("failed to list subscriptions: %v", err)
+	}
+	if len(list.Items) != 2 {
+		t.Errorf("got %d subscriptions, want the 2 default operators only", len(list.Items))
+	}
+}
+
+// Switched on, a hub with nothing subscribed to the package installs the
+// Pipelines operator itself. The other operators are seeded as installed so
+// the run reaches Pipelines; nothing ever installs its CSV on the fake
+// cluster, so the timeout waiting on it is expected.
+func TestEnsureOperatorsInstallsPipelinesOnHubWhenEnabled(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	t.Setenv(common.InstallPipelinesOnHubEnv, "true")
+
+	b := &ClusterBootstrap{Client: newFakeClient(t,
+		newInstalledSubscription("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage),
+		newInstalledSubscription("cert-manager-operator", common.CertManagerOperatorPackage, common.CertManagerOperatorPackage),
+	)}
+	want := operatorFor(t, common.PipelinesOperatorPackage)
+
+	if err := b.ensureOperators(ctx); err == nil {
+		t.Fatal("ensureOperators() returned nil, want a timeout while no CSV is installed")
+	}
+
+	// Read back with a live context: ctx is past its deadline by now.
+	sub := getSubscription(t, b.Client, want.namespace, common.PipelinesOperatorPackage)
+	if sub.Spec.Channel != want.channel {
+		t.Errorf("channel = %q, want the configured %q", sub.Spec.Channel, want.channel)
+	}
+	if !isAddonOwned(sub) {
+		t.Errorf("created subscription labels = %v, want it marked as addon owned", sub.Labels)
+	}
+}
+
+// The opt-in only covers installing the operator where it is missing. An
+// install the hub already had keeps its own channel and is not duplicated.
+func TestEnsureOperatorsLeavesExistingHubPipelinesAlone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	t.Setenv(common.InstallPipelinesOnHubEnv, "true")
+	t.Setenv(common.PipelinesOperatorChannelEnv, "pipelines-1.23")
+
+	// Installed by the cluster admin, in a namespace of their choosing and on
+	// an older channel than the addon is configured for.
+	existing := newSubscriptionOnChannel("operators", "custom-name", common.PipelinesOperatorPackage, "pipelines-1.19")
+	b := &ClusterBootstrap{Client: newFakeClient(t,
+		existing,
+		newInstalledSubscription("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage),
+		newInstalledSubscription("cert-manager-operator", common.CertManagerOperatorPackage, common.CertManagerOperatorPackage),
+	)}
+
+	if err := b.ensureOperators(ctx); err != nil {
+		t.Fatalf("ensureOperators() error = %v", err)
+	}
+
+	sub := getSubscription(t, b.Client, "operators", "custom-name")
+	if sub.Spec.Channel != "pipelines-1.19" {
+		t.Errorf("channel = %q, want the pre-existing %q left alone", sub.Spec.Channel, "pipelines-1.19")
+	}
+
+	list := &olm.SubscriptionList{}
+	if err := b.List(ctx, list); err != nil {
+		t.Fatalf("failed to list subscriptions: %v", err)
+	}
+	if len(list.Items) != 3 {
+		t.Errorf("got %d subscriptions, want no second Pipelines subscription", len(list.Items))
+	}
+}
+
+// A spoke gets the Pipelines operator on top of the defaults.
+func TestEnsureOperatorsInstallsPipelinesOnSpoke(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	b := &ClusterBootstrap{
+		Client: newFakeClient(t,
+			newInstalledSubscription(common.DefaultPipelinesOperatorNamespace, common.PipelinesOperatorPackage, common.PipelinesOperatorPackage),
+			newInstalledSubscription("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage),
+			newInstalledSubscription("cert-manager-operator", common.CertManagerOperatorPackage, common.CertManagerOperatorPackage),
+		),
+		ClusterRole: ClusterRoleSpoke,
+	}
+
+	if err := b.ensureOperators(ctx); err != nil {
+		t.Fatalf("ensureOperators() error = %v", err)
+	}
+
+	if sub, err := b.findSubscription(ctx, common.PipelinesOperatorPackage); err != nil {
+		t.Fatalf("failed to look up the Pipelines subscription: %v", err)
+	} else if sub == nil {
+		t.Error("no Pipelines subscription on a spoke, want the operator installed")
+	}
+}
+
+// With no Pipelines Subscription present, a spoke creates one rather than
+// only reconciling one that is already there. The other operators are seeded
+// as installed so the run reaches Pipelines; nothing ever installs its CSV on
+// the fake cluster, so the timeout waiting on it is expected.
+func TestEnsureOperatorsCreatesPipelinesSubscriptionOnSpoke(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	b := &ClusterBootstrap{
+		Client: newFakeClient(t,
+			newInstalledSubscription("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage),
+			newInstalledSubscription("cert-manager-operator", common.CertManagerOperatorPackage, common.CertManagerOperatorPackage),
+		),
+		ClusterRole: ClusterRoleSpoke,
+	}
+	want := operatorFor(t, common.PipelinesOperatorPackage)
+
+	if err := b.ensureOperators(ctx); err == nil {
+		t.Fatal("ensureOperators() returned nil, want a timeout while no CSV is installed")
+	}
+
+	// Read back with a live context: ctx is past its deadline by now.
+	sub := getSubscription(t, b.Client, want.namespace, common.PipelinesOperatorPackage)
+	if sub.Spec.Channel != want.channel {
+		t.Errorf("channel = %q, want the configured %q", sub.Spec.Channel, want.channel)
+	}
+}
+
 func TestBootstrap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -817,8 +1075,8 @@ func installedSubscriptions(t *testing.T, objs ...client.Object) client.Client {
 	}, objs...)...)
 }
 
-// On a spoke, bootstrap finishes by enabling the Tekton scheduler.
-func TestBootstrapEnablesSchedulerOnSpoke(t *testing.T) {
+// On a spoke, bootstrap finishes by enabling Kueue in the TektonConfig.
+func TestBootstrapEnablesKueueOnSpoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -832,19 +1090,19 @@ func TestBootstrapEnablesSchedulerOnSpoke(t *testing.T) {
 	}
 
 	got := getTektonConfig(t, b.Client, TektonConfigName)
-	if schedulerBool(t, got, "disabled") {
-		t.Error("scheduler was not enabled on a spoke cluster")
+	if kueueBool(t, got, "disabled") {
+		t.Error("kueue was not enabled on a spoke cluster")
 	}
-	if !schedulerBool(t, got, "multi-cluster-disabled") {
-		t.Error("scheduler multi-cluster handling was not disabled on a spoke cluster")
+	if !kueueBool(t, got, "multi-cluster-disabled") {
+		t.Error("kueue multi-cluster handling was not disabled on a spoke cluster")
 	}
-	if role := schedulerString(t, got, "multi-cluster-role"); role != "" {
+	if role := kueueString(t, got, "multi-cluster-role"); role != "" {
 		t.Errorf("multi-cluster-role = %q, want it cleared", role)
 	}
 }
 
 // The hub carries no ClusterRole, so the TektonConfig must be left alone.
-func TestBootstrapLeavesSchedulerAloneOnHub(t *testing.T) {
+func TestBootstrapLeavesKueueAloneOnHub(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -860,16 +1118,16 @@ func TestBootstrapLeavesSchedulerAloneOnHub(t *testing.T) {
 	}
 
 	got := getTektonConfig(t, b.Client, TektonConfigName)
-	if !schedulerBool(t, got, "disabled") {
-		t.Error("hub bootstrap modified the TektonConfig scheduler, want it untouched")
+	if !kueueBool(t, got, "disabled") {
+		t.Error("hub bootstrap modified the TektonConfig kueue section, want it untouched")
 	}
-	if _, found, _ := unstructured.NestedString(got.Object, "spec", "scheduler", "multi-cluster-role"); found {
+	if _, found, _ := unstructured.NestedString(got.Object, "spec", "kueue", "multi-cluster-role"); found {
 		t.Error("hub bootstrap set a multi-cluster-role, want the TektonConfig untouched")
 	}
 }
 
 // A spoke with no TektonConfig fails the whole bootstrap rather than
-// silently skipping the scheduler.
+// silently skipping the Kueue enablement.
 func TestBootstrapFailsOnSpokeWithoutTektonConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

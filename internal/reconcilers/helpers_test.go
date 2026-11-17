@@ -71,15 +71,15 @@ var tektonConfigGVK = schema.GroupVersionKind{
 	Kind:    "TektonConfig",
 }
 
-// newTektonConfig returns an unstructured TektonConfig whose spec.scheduler
-// holds the given fields. A nil scheduler means the field is absent, which is
-// how a cluster that has never had the scheduler configured looks.
-func newTektonConfig(name string, scheduler map[string]any) *unstructured.Unstructured {
+// newTektonConfig returns an unstructured TektonConfig whose spec.kueue holds
+// the given fields. A nil map means the field is absent, which is how a
+// cluster that has never had Kueue configured looks.
+func newTektonConfig(name string, kueue map[string]any) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(tektonConfigGVK)
 	obj.SetName(name)
-	if scheduler != nil {
-		if err := unstructured.SetNestedMap(obj.Object, scheduler, "spec", "scheduler"); err != nil {
+	if kueue != nil {
+		if err := unstructured.SetNestedMap(obj.Object, kueue, "spec", "kueue"); err != nil {
 			panic(err)
 		}
 	}
@@ -99,32 +99,32 @@ func getTektonConfig(t *testing.T, c client.Client, name string) *unstructured.U
 	return got
 }
 
-// schedulerBool reads spec.scheduler.<field> and fails the test if it is
-// absent or not a bool.
-func schedulerBool(t *testing.T, obj *unstructured.Unstructured, field string) bool {
+// kueueBool reads spec.kueue.<field> and fails the test if it is absent or
+// not a bool.
+func kueueBool(t *testing.T, obj *unstructured.Unstructured, field string) bool {
 	t.Helper()
 
-	v, found, err := unstructured.NestedBool(obj.Object, "spec", "scheduler", field)
+	v, found, err := unstructured.NestedBool(obj.Object, "spec", "kueue", field)
 	if err != nil {
-		t.Fatalf("spec.scheduler.%s is not a bool: %v", field, err)
+		t.Fatalf("spec.kueue.%s is not a bool: %v", field, err)
 	}
 	if !found {
-		t.Fatalf("spec.scheduler.%s is absent, want it set", field)
+		t.Fatalf("spec.kueue.%s is absent, want it set", field)
 	}
 	return v
 }
 
-// schedulerString reads spec.scheduler.<field> and fails the test if it is
-// absent or not a string.
-func schedulerString(t *testing.T, obj *unstructured.Unstructured, field string) string {
+// kueueString reads spec.kueue.<field> and fails the test if it is absent or
+// not a string.
+func kueueString(t *testing.T, obj *unstructured.Unstructured, field string) string {
 	t.Helper()
 
-	v, found, err := unstructured.NestedString(obj.Object, "spec", "scheduler", field)
+	v, found, err := unstructured.NestedString(obj.Object, "spec", "kueue", field)
 	if err != nil {
-		t.Fatalf("spec.scheduler.%s is not a string: %v", field, err)
+		t.Fatalf("spec.kueue.%s is not a string: %v", field, err)
 	}
 	if !found {
-		t.Fatalf("spec.scheduler.%s is absent, want it set", field)
+		t.Fatalf("spec.kueue.%s is absent, want it set", field)
 	}
 	return v
 }

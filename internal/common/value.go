@@ -25,6 +25,11 @@ const (
 	// channel the cert-manager Operator is subscribed to
 	CertManagerOperatorChannelEnv = "CERT_MANAGER_OPERATOR_CHANNEL"
 
+	// InstallPipelinesOnHubEnv is the environment variable that opts a hub
+	// cluster into having the OpenShift Pipelines Operator installed when
+	// nothing on the cluster is subscribed to it yet
+	InstallPipelinesOnHubEnv = "INSTALL_PIPELINES_ON_HUB"
+
 	// PipelinesOperatorNamespaceEnv is the environment variable for the
 	// namespace the OpenShift Pipelines Operator is subscribed in
 	PipelinesOperatorNamespaceEnv = "PIPELINES_OPERATOR_NAMESPACE"
@@ -119,4 +124,12 @@ func IsImpersonationMode() bool {
 // IsClusterProfileEnabled returns true if ClusterProfile mode is enabled
 func IsClusterProfileEnabled() bool {
 	return os.Getenv(EnableClusterProfileEnv) == "true"
+}
+
+// IsPipelinesOnHubEnabled reports whether a hub cluster should have the
+// OpenShift Pipelines Operator installed when the package is not subscribed to
+// already. It is off unless explicitly switched on, so a hub is never
+// subscribed to the operator by surprise.
+func IsPipelinesOnHubEnabled() bool {
+	return os.Getenv(InstallPipelinesOnHubEnv) == "true"
 }
