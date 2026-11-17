@@ -170,7 +170,7 @@ Pointing an operator at a different release is a matter of setting its channel o
 ```sh
 kubectl set env deployment/pipelines-multikueue-plugin-controller \
   -n tekton-kueue \
-  PIPELINES_OPERATOR_CHANNEL=pipelines-1.23
+  PIPELINES_OPERATOR_CHANNEL=pipelines-1.25
 ```
 
 The controller reads its environment on every reconcile, so this takes effect as soon as the new pod is running. Rolling a version number back within its series is the one thing this cannot do; that has to be done by editing the Subscription directly.
@@ -192,8 +192,8 @@ Operator channels and namespaces are read from the controller's environment on e
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
-| OpenShift Pipelines channel | `PIPELINES_OPERATOR_CHANNEL` | `pipelines-1.22` |
-| Kueue Operator channel | `KUEUE_OPERATOR_CHANNEL` | `stable-v1.4` |
+| OpenShift Pipelines channel | `PIPELINES_OPERATOR_CHANNEL` | `pipelines-1.24` |
+| Kueue Operator channel | `KUEUE_OPERATOR_CHANNEL` | `stable-v1.5` |
 | cert-manager Operator channel | `CERT_MANAGER_OPERATOR_CHANNEL` | `stable-v1` |
 | OpenShift Pipelines namespace | `PIPELINES_OPERATOR_NAMESPACE` | `openshift-operators` |
 | Kueue namespace | `KUEUE_NAMESPACE` | `openshift-kueue-operator` |
