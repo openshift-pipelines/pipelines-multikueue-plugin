@@ -51,6 +51,11 @@ spec:
         #   value: openshift-kueue-operator
         # - name: CERT_MANAGER_OPERATOR_NAMESPACE
         #   value: cert-manager-operator
+        # Set to "true" to have the hub install the Pipelines operator when
+        # nothing on it is subscribed to the package yet. Managed clusters
+        # always get it.
+        # - name: INSTALL_PIPELINES_ON_HUB
+        #   value: "true"
         ports:
         - containerPort: 8443
           name: metrics-server
