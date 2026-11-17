@@ -40,9 +40,9 @@ spec:
         # reads them on every reconcile.
         env: []
         # - name: PIPELINES_OPERATOR_CHANNEL
-        #   value: pipelines-1.22
+        #   value: pipelines-1.24
         # - name: KUEUE_OPERATOR_CHANNEL
-        #   value: stable-v1.4
+        #   value: stable-v1.5
         # - name: CERT_MANAGER_OPERATOR_CHANNEL
         #   value: stable-v1
         # - name: PIPELINES_OPERATOR_NAMESPACE
