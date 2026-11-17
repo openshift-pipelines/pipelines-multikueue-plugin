@@ -629,23 +629,23 @@ func TestEnsureKubeConfigSecretUpdatesExisting(t *testing.T) {
 	}
 }
 
-// enableKueueInTektonConfig flips the TektonScheduler on so Kueue can admit
-// PipelineRuns, turns the scheduler's own multi-cluster handling off and
-// clears its multi-cluster role, leaving cross-cluster dispatch to Kueue.
-// The TektonConfig is patched as an unstructured object, so the Tekton
-// operator Go types are not registered in the client's scheme. It only ever
-// runs against the singleton TektonConfig named "config" on a spoke cluster.
+// enableKueueInTektonConfig flips spec.kueue on so Kueue can admit
+// PipelineRuns, turns its own multi-cluster handling off and clears its
+// multi-cluster role, leaving cross-cluster dispatch to Kueue. The
+// TektonConfig is patched as an unstructured object, so the Tekton operator Go
+// types are not registered in the client's scheme. It only ever runs against
+// the singleton TektonConfig named "config" on a spoke cluster.
 
-func TestEnableKueueInTektonConfigEnablesScheduler(t *testing.T) {
+func TestEnableKueueInTektonConfigEnablesKueue(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		scheduler map[string]any
+		name  string
+		kueue map[string]any
 	}{
-		{"scheduler explicitly disabled", map[string]any{"disabled": true}},
-		{"scheduler field unset", nil},
-		{"scheduler already enabled", map[string]any{"disabled": false}},
+		{"kueue explicitly disabled", map[string]any{"disabled": true}},
+		{"kueue field unset", nil},
+		{"kueue already enabled", map[string]any{"disabled": false}},
 		{
-			"scheduler carries a stale spoke role",
+			"kueue carries a stale spoke role",
 			map[string]any{
 				"disabled":               false,
 				"multi-cluster-disabled": false,
@@ -653,7 +653,7 @@ func TestEnableKueueInTektonConfigEnablesScheduler(t *testing.T) {
 			},
 		},
 		{
-			"scheduler already in the target state",
+			"kueue already in the target state",
 			map[string]any{
 				"disabled":               false,
 				"multi-cluster-disabled": true,
@@ -663,23 +663,23 @@ func TestEnableKueueInTektonConfigEnablesScheduler(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
-			r := &ClusterBootstrap{Client: newFakeClient(t, newTektonConfig(TektonConfigName, tc.scheduler))}
+			r := &ClusterBootstrap{Client: newFakeClient(t, newTektonConfig(TektonConfigName, tc.kueue))}
 
 			if err := r.enableKueueInTektonConfig(ctx); err != nil {
 				t.Fatalf("enableKueueInTektonConfig() error = %v", err)
 			}
 
 			got := getTektonConfig(t, r.Client, TektonConfigName)
-			if schedulerBool(t, got, "disabled") {
-				t.Error("scheduler disabled = true, want false")
+			if kueueBool(t, got, "disabled") {
+				t.Error("kueue disabled = true, want false")
 			}
-			if !schedulerBool(t, got, "multi-cluster-disabled") {
-				t.Error("scheduler multi-cluster-disabled = false, want true")
+			if !kueueBool(t, got, "multi-cluster-disabled") {
+				t.Error("kueue multi-cluster-disabled = false, want true")
 			}
 			// The role is written as "" rather than omitted, so a stale role
 			// from an earlier configuration is actively cleared.
-			if role := schedulerString(t, got, "multi-cluster-role"); role != "" {
-				t.Errorf("scheduler multi-cluster-role = %q, want it cleared", role)
+			if role := kueueString(t, got, "multi-cluster-role"); role != "" {
+				t.Errorf("kueue multi-cluster-role = %q, want it cleared", role)
 			}
 		})
 	}
@@ -707,13 +707,13 @@ func TestEnableKueueInTektonConfigPreservesUnrelatedFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spec.profile: %v", err)
 	}
-	assert.Equal(t, "all", profile, "spec.profile was clobbered by the scheduler patch")
+	assert.Equal(t, "all", profile, "spec.profile was clobbered by the kueue patch")
 
 	ns, _, err := unstructured.NestedString(got.Object, "spec", "targetNamespace")
 	if err != nil {
 		t.Fatalf("spec.targetNamespace: %v", err)
 	}
-	assert.Equal(t, "openshift-pipelines", ns, "spec.targetNamespace was clobbered by the scheduler patch")
+	assert.Equal(t, "openshift-pipelines", ns, "spec.targetNamespace was clobbered by the kueue patch")
 }
 
 // Calling it twice must not error or flip the fields back.
@@ -728,9 +728,9 @@ func TestEnableKueueInTektonConfigIsIdempotent(t *testing.T) {
 	}
 
 	got := getTektonConfig(t, r.Client, TektonConfigName)
-	assert.False(t, schedulerBool(t, got, "disabled"))
-	assert.True(t, schedulerBool(t, got, "multi-cluster-disabled"))
-	assert.Equal(t, "", schedulerString(t, got, "multi-cluster-role"))
+	assert.False(t, kueueBool(t, got, "disabled"))
+	assert.True(t, kueueBool(t, got, "multi-cluster-disabled"))
+	assert.Equal(t, "", kueueString(t, got, "multi-cluster-role"))
 }
 
 // With no TektonConfig present the patch error is returned verbatim, which
@@ -760,8 +760,8 @@ func TestEnableKueueInTektonConfigIgnoresOtherNames(t *testing.T) {
 	}
 
 	got := getTektonConfig(t, r.Client, "not-config")
-	if !schedulerBool(t, got, "disabled") {
-		t.Error("unrelated TektonConfig scheduler was modified, want it left disabled")
+	if !kueueBool(t, got, "disabled") {
+		t.Error("unrelated TektonConfig kueue was modified, want it left disabled")
 	}
 }
 

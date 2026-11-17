@@ -78,7 +78,7 @@ type operator struct {
 	namespace   string
 }
 
-// defaultOperators returns the operators the addon installs on the hub and on
+// allOperators returns the operators the addon installs on the hub and on
 // every managed cluster, with the channel and namespace each one should be
 // subscribed in.
 //
@@ -87,13 +87,8 @@ type operator struct {
 // rebuilding the image. Pointing a channel at a newer one upgrades that
 // operator on the next reconcile, on every cluster where the addon installed
 // it.
-func defaultOperators() []operator {
-	return []operator{
-		{
-			packageName: common.PipelinesOperatorPackage,
-			channel:     common.GetPipelinesOperatorChannel(),
-			namespace:   common.GetPipelinesOperatorNamespace(),
-		},
+func allOperators(role string) []operator {
+	operators := []operator{
 		{
 			packageName: common.KueueOperatorPackage,
 			channel:     common.GetKueueOperatorChannel(),
@@ -105,6 +100,16 @@ func defaultOperators() []operator {
 			namespace:   common.GetCertManagerOperatorNamespace(),
 		},
 	}
+
+	if role == ClusterRoleSpoke || common.IsPipelinesOnHubEnabled() {
+		operators = append(operators, operator{
+			packageName: common.PipelinesOperatorPackage,
+			channel:     common.GetPipelinesOperatorChannel(),
+			namespace:   common.GetPipelinesOperatorNamespace(),
+		})
+	}
+
+	return operators
 }
 
 // +kubebuilder:rbac:groups="",resources=namespaces;secrets,verbs=get;list;watch;create;update
@@ -113,14 +118,12 @@ func defaultOperators() []operator {
 func (r *ClusterBootstrap) ensureOperators(ctx context.Context) error {
 	logger := log.FromContext(ctx)
 
-	logger.Info("Installing Operators")
-
-	for _, op := range defaultOperators() {
+	logger.Info("Installing Operators", "Cluster Role", r.ClusterRole)
+	for _, op := range allOperators(r.ClusterRole) {
 		if err := r.ensureOperator(ctx, op); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
