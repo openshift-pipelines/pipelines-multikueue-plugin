@@ -97,8 +97,8 @@ func TestManifestFSMissingFile(t *testing.T) {
 }
 
 // The spoke ClusterBootstrap reads and patches the singleton TektonConfig to
-// enable the Tekton scheduler. The ClusterRole shipped to the managed cluster
-// has to carry that permission or the patch is rejected at runtime.
+// enable Kueue. The ClusterRole shipped to the managed cluster has to carry
+// that permission or the patch is rejected at runtime.
 func TestClusterRoleGrantsTektonConfigAccess(t *testing.T) {
 	data, err := ManifestFS.ReadFile("manifests/cluster-role.yaml")
 	if err != nil {

@@ -115,7 +115,7 @@ func (r *ClusterBootstrap) enableKueueInTektonConfig(ctx context.Context) error 
 	// JSON Merge Patch payload
 	patchData := []byte(`{
         "spec": {
-            "scheduler": {
+            "kueue": {
                 "disabled": false,
 				"multi-cluster-disabled": true,
 				"multi-cluster-role": ""
