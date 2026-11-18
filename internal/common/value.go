@@ -46,12 +46,14 @@ const (
 
 	// Channels each operator is subscribed to when the matching environment
 	// variable is unset.
+
 	DefaultPipelinesOperatorChannel   = "pipelines-1.24"
 	DefaultKueueOperatorChannel       = "stable-v1.5"
 	DefaultCertManagerOperatorChannel = "stable-v1"
 
 	// Namespaces each operator is subscribed in when the matching environment
 	// variable is unset.
+
 	DefaultKueueOperatorNamespace       = "openshift-kueue-operator"
 	DefaultPipelinesOperatorNamespace   = "openshift-operators"
 	DefaultCertManagerOperatorNamespace = "cert-manager-operator"
