@@ -366,6 +366,106 @@ func TestAllOperatorsReadsNamespacesFromEnv(t *testing.T) {
 	}
 }
 
+// catalogs returns the catalog each operator in ops is subscribed from, keyed
+// by package.
+func catalogs(ops []operator) map[string]string {
+	byPackage := make(map[string]string, len(ops))
+	for _, op := range ops {
+		byPackage[op.packageName] = op.catalog
+	}
+	return byPackage
+}
+
+// With nothing overridden, all three operators come from the released Red Hat
+// catalog.
+func TestAllOperatorsFallsBackToTheDefaultCatalog(t *testing.T) {
+	unsetEnv(t, common.PipelinesOperatorCatalogEnv)
+
+	for _, packageName := range []string{
+		common.PipelinesOperatorPackage,
+		common.KueueOperatorPackage,
+		common.CertManagerOperatorPackage,
+	} {
+		t.Run(packageName, func(t *testing.T) {
+			if got := operatorFor(t, packageName).catalog; got != common.DefaultOperatorCatalog {
+				t.Errorf("catalog = %q, want the built-in default %q", got, common.DefaultOperatorCatalog)
+			}
+		})
+	}
+}
+
+// The override exists so Pipelines can be installed from a build the released
+// catalog does not carry. It must not drag the other two along with it: they
+// have no presence in a Pipelines catalog, and a Subscription pointed at one
+// would never resolve.
+func TestAllOperatorsReadsPipelinesCatalogFromEnv(t *testing.T) {
+	t.Setenv(common.PipelinesOperatorCatalogEnv, "custom-pipelines-catalog")
+
+	got := catalogs(allOperators(ClusterRoleSpoke))
+
+	if got[common.PipelinesOperatorPackage] != "custom-pipelines-catalog" {
+		t.Errorf("Pipelines catalog = %q, want the %s override %q",
+			got[common.PipelinesOperatorPackage], common.PipelinesOperatorCatalogEnv, "custom-pipelines-catalog")
+	}
+	for _, packageName := range []string{common.KueueOperatorPackage, common.CertManagerOperatorPackage} {
+		if got[packageName] != common.DefaultOperatorCatalog {
+			t.Errorf("%s catalog = %q, want the default %q kept", packageName, got[packageName], common.DefaultOperatorCatalog)
+		}
+	}
+}
+
+// The hub reads the same override as a spoke, so an opted-in hub and its
+// managed clusters install Pipelines from the same catalog.
+func TestAllOperatorsReadsPipelinesCatalogOnHub(t *testing.T) {
+	t.Setenv(common.InstallPipelinesOnHubEnv, "true")
+	t.Setenv(common.PipelinesOperatorCatalogEnv, "custom-pipelines-catalog")
+
+	got := findOperator(t, allOperators(hubRole), common.PipelinesOperatorPackage)
+	if got.catalog != "custom-pipelines-catalog" {
+		t.Errorf("catalog = %q, want the environment override %q", got.catalog, "custom-pipelines-catalog")
+	}
+}
+
+// An empty override is treated as no override. A Subscription naming no
+// catalog at all is one OLM can never resolve, so a blank value in the
+// Deployment must not produce one.
+func TestAllOperatorsIgnoresEmptyCatalogOverride(t *testing.T) {
+	t.Setenv(common.PipelinesOperatorCatalogEnv, "")
+
+	if got := operatorFor(t, common.PipelinesOperatorPackage).catalog; got != common.DefaultOperatorCatalog {
+		t.Errorf("catalog = %q, want the built-in default %q", got, common.DefaultOperatorCatalog)
+	}
+}
+
+// Every field of an operator entry ends up in the Subscription, so an entry
+// added without one of them yields a Subscription OLM cannot act on. Catching
+// that here is cheaper than finding an unresolvable Subscription on a cluster.
+func TestAllOperatorsFillsEveryField(t *testing.T) {
+	t.Setenv(common.InstallPipelinesOnHubEnv, "true")
+
+	for _, role := range []struct{ name, role string }{
+		{"hub", hubRole},
+		{"spoke", ClusterRoleSpoke},
+	} {
+		t.Run(role.name, func(t *testing.T) {
+			for _, op := range allOperators(role.role) {
+				if op.packageName == "" {
+					t.Errorf("operator %+v has no package name", op)
+				}
+				if op.catalog == "" {
+					t.Errorf("operator %q has no catalog", op.packageName)
+				}
+				if op.channel == "" {
+					t.Errorf("operator %q has no channel", op.packageName)
+				}
+				if op.namespace == "" {
+					t.Errorf("operator %q has no namespace", op.packageName)
+				}
+			}
+		})
+	}
+}
+
 // The reconcile loop must pick up a channel changed after the process started,
 // so the table cannot be resolved once at package initialization.
 func TestEnsureOperatorsUsesCurrentEnvironment(t *testing.T) {
@@ -411,9 +511,22 @@ func unsetEnv(t *testing.T, envName string) {
 }
 
 // testOperator returns an operator configured for a package, channel and
-// namespace, the way allOperators builds one.
+// namespace, the way allOperators builds one: subscribed from the default
+// catalog, since that is where every operator comes from unless the Pipelines
+// catalog is overridden.
 func testOperator(packageName, channel, namespace string) operator {
-	return operator{packageName: packageName, channel: channel, namespace: namespace}
+	return testOperatorFromCatalog(packageName, channel, namespace, common.DefaultOperatorCatalog)
+}
+
+// testOperatorFromCatalog is testOperator with the catalog spelled out, for
+// the cases where which catalog the Subscription names is the point.
+func testOperatorFromCatalog(packageName, channel, namespace, catalog string) operator {
+	return operator{
+		packageName: packageName,
+		channel:     channel,
+		namespace:   namespace,
+		catalog:     catalog,
+	}
 }
 
 // newSubscriptionOnChannel returns an installed Subscription sitting on a
@@ -554,6 +667,58 @@ func TestEnsureOperatorCreatesSubscription(t *testing.T) {
 	ns := &corev1.Namespace{}
 	if err := b.Get(context.Background(), client.ObjectKey{Name: "openshift-kueue-operator"}, ns); err != nil {
 		t.Errorf("subscription namespace was not created: %v", err)
+	}
+}
+
+// A Subscription the controller creates names the operator's configured
+// catalog. The catalog's namespace is fixed: OLM resolves a CatalogSource by
+// name within openshift-marketplace.
+func TestEnsureOperatorCreatesSubscriptionInConfiguredCatalog(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	b := &ClusterBootstrap{Client: newFakeClient(t)}
+
+	op := testOperatorFromCatalog(common.PipelinesOperatorPackage, "pipelines-1.24", "openshift-operators", "custom-pipelines-catalog")
+	// Nothing installs a CSV on the fake cluster, so the readiness poll runs
+	// to the context deadline; the Subscription it created is the point.
+	if err := b.ensureOperator(ctx, op); err == nil {
+		t.Fatal("ensureOperator() returned nil, want a timeout while the CSV is not installed")
+	}
+
+	sub := getSubscription(t, b.Client, "openshift-operators", common.PipelinesOperatorPackage)
+	if sub.Spec.CatalogSource != "custom-pipelines-catalog" {
+		t.Errorf("catalog source = %q, want the configured %q", sub.Spec.CatalogSource, "custom-pipelines-catalog")
+	}
+	if sub.Spec.CatalogSourceNamespace != "openshift-marketplace" {
+		t.Errorf("catalog source namespace = %q, want %q", sub.Spec.CatalogSourceNamespace, "openshift-marketplace")
+	}
+}
+
+// Unlike the channel, the catalog of a Subscription that is already there is
+// not reconciled: switching catalogs under a running operator would have OLM
+// re-resolve its CSV from a different source. Moving an existing install to
+// another catalog is a manual operation.
+func TestEnsureOperatorLeavesExistingSubscriptionCatalogAlone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	existing := addonOwned(newSubscriptionOnChannel("openshift-operators", common.PipelinesOperatorPackage, common.PipelinesOperatorPackage, "pipelines-1.23"))
+	existing.Spec.CatalogSource = common.DefaultOperatorCatalog
+	b := &ClusterBootstrap{Client: newReadySubscriptionUpgradeClient(t, existing)}
+
+	op := testOperatorFromCatalog(common.PipelinesOperatorPackage, "pipelines-1.24", "openshift-operators", "custom-pipelines-catalog")
+	if err := b.ensureOperator(ctx, op); err != nil {
+		t.Fatalf("ensureOperator() error = %v", err)
+	}
+
+	sub := getSubscription(t, b.Client, "openshift-operators", common.PipelinesOperatorPackage)
+	if sub.Spec.CatalogSource != common.DefaultOperatorCatalog {
+		t.Errorf("catalog source = %q, want the existing %q left alone", sub.Spec.CatalogSource, common.DefaultOperatorCatalog)
+	}
+	// The channel is still reconciled, catalog or no catalog.
+	if sub.Spec.Channel != "pipelines-1.24" {
+		t.Errorf("channel = %q, want the subscription moved to %q", sub.Spec.Channel, "pipelines-1.24")
 	}
 }
 
@@ -1009,6 +1174,60 @@ func TestEnsureOperatorsCreatesPipelinesSubscriptionOnSpoke(t *testing.T) {
 	sub := getSubscription(t, b.Client, want.namespace, common.PipelinesOperatorPackage)
 	if sub.Spec.Channel != want.channel {
 		t.Errorf("channel = %q, want the configured %q", sub.Spec.Channel, want.channel)
+	}
+}
+
+// End to end from the Deployment's environment to the Subscription on the
+// cluster: a spoke with no Pipelines Subscription creates one from the
+// configured catalog. The other operators are seeded as installed so the run
+// reaches Pipelines; nothing ever installs its CSV on the fake cluster, so the
+// timeout waiting on it is expected.
+func TestEnsureOperatorsCreatesPipelinesSubscriptionInConfiguredCatalog(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	t.Setenv(common.PipelinesOperatorCatalogEnv, "custom-pipelines-catalog")
+
+	b := &ClusterBootstrap{
+		Client: newFakeClient(t,
+			newInstalledSubscription("openshift-kueue-operator", common.KueueOperatorPackage, common.KueueOperatorPackage),
+			newInstalledSubscription("cert-manager-operator", common.CertManagerOperatorPackage, common.CertManagerOperatorPackage),
+		),
+		ClusterRole: ClusterRoleSpoke,
+	}
+	want := operatorFor(t, common.PipelinesOperatorPackage)
+
+	if err := b.ensureOperators(ctx); err == nil {
+		t.Fatal("ensureOperators() returned nil, want a timeout while no CSV is installed")
+	}
+
+	// Read back with a live context: ctx is past its deadline by now.
+	sub := getSubscription(t, b.Client, want.namespace, common.PipelinesOperatorPackage)
+	if sub.Spec.CatalogSource != "custom-pipelines-catalog" {
+		t.Errorf("catalog source = %q, want the configured %q", sub.Spec.CatalogSource, "custom-pipelines-catalog")
+	}
+}
+
+// The Pipelines catalog override must not leak onto the operators that are
+// only ever published in the released catalog. Kueue is subscribed first, so
+// a short deadline is enough to see the Subscription it creates.
+func TestEnsureOperatorsKeepsOtherOperatorsOnTheDefaultCatalog(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	t.Setenv(common.PipelinesOperatorCatalogEnv, "custom-pipelines-catalog")
+
+	b := &ClusterBootstrap{Client: newFakeClient(t), ClusterRole: ClusterRoleSpoke}
+	want := operatorFor(t, common.KueueOperatorPackage)
+
+	if err := b.ensureOperators(ctx); err == nil {
+		t.Fatal("ensureOperators() returned nil, want a timeout while no CSV is installed")
+	}
+
+	// Read back with a live context: ctx is past its deadline by now.
+	sub := getSubscription(t, b.Client, want.namespace, common.KueueOperatorPackage)
+	if sub.Spec.CatalogSource != common.DefaultOperatorCatalog {
+		t.Errorf("Kueue catalog source = %q, want the default %q", sub.Spec.CatalogSource, common.DefaultOperatorCatalog)
 	}
 }
 
