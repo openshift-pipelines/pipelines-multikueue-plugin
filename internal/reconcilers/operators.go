@@ -70,34 +70,44 @@ func (b *ClusterBootstrap) bootstrap(ctx context.Context) error {
 	return nil
 }
 
-// operator describes an OLM operator the addon installs, and the channel it
-// should be subscribed to.
+// operator describes an OLM operator the addon installs: the catalog it is
+// subscribed from, the channel it is subscribed to, and the namespace it is
+// subscribed in. Every field must be set; an empty catalog in particular would
+// produce a Subscription OLM cannot resolve.
 type operator struct {
 	packageName string
 	channel     string
 	namespace   string
+	catalog     string
 }
 
 // allOperators returns the operators the addon installs on the hub and on
-// every managed cluster, with the channel and namespace each one should be
-// subscribed in.
+// every managed cluster, with the catalog, channel and namespace each one
+// should be subscribed with.
 //
-// Both come from the controller's environment, so a cluster can be moved onto
+// These come from the controller's environment, so a cluster can be moved onto
 // a different operator release by editing the Deployment rather than
 // rebuilding the image. Pointing a channel at a newer one upgrades that
 // operator on the next reconcile, on every cluster where the addon installed
 // it.
+//
+// Only Pipelines takes its catalog from the environment. Kueue and
+// cert-manager are always subscribed from the default catalog, since the
+// reason to switch catalogs — running a Pipelines build the released catalog
+// does not carry — does not apply to them.
 func allOperators(role string) []operator {
 	operators := []operator{
 		{
 			packageName: common.KueueOperatorPackage,
 			channel:     common.GetKueueOperatorChannel(),
 			namespace:   common.GetKueueOperatorNamespace(),
+			catalog:     common.DefaultOperatorCatalog,
 		},
 		{
 			packageName: common.CertManagerOperatorPackage,
 			channel:     common.GetCertManagerOperatorChannel(),
 			namespace:   common.GetCertManagerOperatorNamespace(),
+			catalog:     common.DefaultOperatorCatalog,
 		},
 	}
 
@@ -106,6 +116,7 @@ func allOperators(role string) []operator {
 			packageName: common.PipelinesOperatorPackage,
 			channel:     common.GetPipelinesOperatorChannel(),
 			namespace:   common.GetPipelinesOperatorNamespace(),
+			catalog:     common.GetPipelinesOperatorCatalog(),
 		})
 	}
 
@@ -127,10 +138,15 @@ func (r *ClusterBootstrap) ensureOperators(ctx context.Context) error {
 	return nil
 }
 
-// ensureOperator subscribes the cluster to op's package on op's channel,
-// reconciling the channel of an addon-installed Subscription that sits
-// elsewhere, and then checks the state of the Subscription. If it is not fully
-// installed, it returns an error to trigger a controller requeue.
+// ensureOperator subscribes the cluster to op's package on op's channel, from
+// op's catalog, reconciling the channel of an addon-installed Subscription
+// that sits elsewhere, and then checks the state of the Subscription. If it is
+// not fully installed, it returns an error to trigger a controller requeue.
+//
+// The catalog is only applied when the Subscription is created. A Subscription
+// that is already there keeps the catalog it has, so changing the configured
+// catalog does not move an operator between catalogs on a cluster that already
+// runs it.
 func (c *ClusterBootstrap) ensureOperator(ctx context.Context, op operator) error {
 	logger := log.FromContext(ctx)
 
@@ -161,7 +177,7 @@ func (c *ClusterBootstrap) ensureOperator(ctx context.Context, op operator) erro
 			Spec: &olm.SubscriptionSpec{
 				Channel:                op.channel,
 				Package:                op.packageName,
-				CatalogSource:          "redhat-operators",
+				CatalogSource:          op.catalog,
 				CatalogSourceNamespace: "openshift-marketplace",
 			},
 		}

@@ -35,9 +35,10 @@ func TestGetEnvOrDefault(t *testing.T) {
 	}
 }
 
-// TestOperatorGetters checks that every operator channel and namespace getter
-// is wired to its own environment variable and its own default. Crossed wiring
-// between the six is the mistake worth catching here.
+// TestOperatorGetters checks that every operator catalog, channel and
+// namespace getter is wired to its own environment variable and its own
+// default. Crossed wiring between the seven is the mistake worth catching
+// here.
 func TestOperatorGetters(t *testing.T) {
 	getters := []struct {
 		name        string
@@ -53,6 +54,7 @@ func TestOperatorGetters(t *testing.T) {
 		{"GetPipelinesOperatorNamespace", GetPipelinesOperatorNamespace, PipelinesOperatorNamespaceEnv, "openshift-operators"},
 		{"GetKueueOperatorNamespace", GetKueueOperatorNamespace, KueueNamespaceEnv, "openshift-kueue-operator"},
 		{"GetCertManagerOperatorNamespace", GetCertManagerOperatorNamespace, CertManagerOperatorNamespaceEnv, "cert-manager-operator"},
+		{"GetPipelinesOperatorCatalog", GetPipelinesOperatorCatalog, PipelinesOperatorCatalogEnv, "redhat-operators"},
 	}
 
 	// Every variable in play, so a getter reading the wrong one is visible.
@@ -201,6 +203,7 @@ func TestConstants(t *testing.T) {
 		{"KueueNamespaceEnv", KueueNamespaceEnv, "KUEUE_NAMESPACE"},
 		{"ClusterProxyImpersonationEnv", ClusterProxyImpersonationEnv, "CLUSTER_PROXY_IMPERSONATION_ENABLED"},
 		{"EnableClusterProfileEnv", EnableClusterProfileEnv, "ENABLE_CLUSTERPROFILE"},
+		{"PipelinesOperatorCatalogEnv", PipelinesOperatorCatalogEnv, "PIPELINES_OPERATOR_CATALOG"},
 		{"PipelinesOperatorChannelEnv", PipelinesOperatorChannelEnv, "PIPELINES_OPERATOR_CHANNEL"},
 		{"KueueOperatorChannelEnv", KueueOperatorChannelEnv, "KUEUE_OPERATOR_CHANNEL"},
 		{"CertManagerOperatorChannelEnv", CertManagerOperatorChannelEnv, "CERT_MANAGER_OPERATOR_CHANNEL"},
@@ -212,6 +215,7 @@ func TestConstants(t *testing.T) {
 		{"DefaultKueueOperatorNamespace", DefaultKueueOperatorNamespace, "openshift-kueue-operator"},
 		{"DefaultPipelinesOperatorNamespace", DefaultPipelinesOperatorNamespace, "openshift-operators"},
 		{"DefaultCertManagerOperatorNamespace", DefaultCertManagerOperatorNamespace, "cert-manager-operator"},
+		{"DefaultOperatorCatalog", DefaultOperatorCatalog, "redhat-operators"},
 		{"MultiKueueResourceName", MultiKueueResourceName, "multikueue"},
 		{"AdmissionCheckControllerName", AdmissionCheckControllerName, "open-cluster-management.io/placement"},
 	}
