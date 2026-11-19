@@ -15,6 +15,9 @@ const (
 	// EnableClusterProfileEnv is the environment variable for enabling ClusterProfile mode
 	EnableClusterProfileEnv = "ENABLE_CLUSTERPROFILE"
 
+	// PipelinesOperatorCatalogEnv is the environment variable for the OLM
+	// CatalogSource the OpenShift Pipelines Operator is subscribed from
+	PipelinesOperatorCatalogEnv = "PIPELINES_OPERATOR_CATALOG"
 	// PipelinesOperatorChannelEnv is the environment variable for the OLM
 	// channel the OpenShift Pipelines Operator is subscribed to
 	PipelinesOperatorChannelEnv = "PIPELINES_OPERATOR_CHANNEL"
@@ -36,6 +39,11 @@ const (
 	// CertManagerOperatorNamespaceEnv is the environment variable for the
 	// namespace the cert-manager Operator is subscribed in
 	CertManagerOperatorNamespaceEnv = "CERT_MANAGER_OPERATOR_NAMESPACE"
+
+	// DefaultOperatorCatalog is the OLM CatalogSource every operator is
+	// subscribed from unless something says otherwise. It is the catalog
+	// shipping the released builds of all three.
+	DefaultOperatorCatalog = "redhat-operators"
 
 	// OLM package names of the operators the addon installs. These name
 	// catalog content, not anything the addon owns, so they are fixed rather
@@ -66,13 +74,22 @@ const (
 )
 
 // The operator getters below read the environment on every call rather than
-// caching it, so a channel or namespace changed on the controller Deployment
-// takes effect on the next reconcile.
+// caching it, so a catalog, channel or namespace changed on the controller
+// Deployment takes effect on the next reconcile.
 
 // GetPipelinesOperatorChannel returns the OLM channel the OpenShift Pipelines
 // Operator is subscribed to.
 func GetPipelinesOperatorChannel() string {
 	return GetEnvOrDefault(PipelinesOperatorChannelEnv, DefaultPipelinesOperatorChannel)
+}
+
+// GetPipelinesOperatorCatalog returns the OLM CatalogSource the OpenShift
+// Pipelines Operator is subscribed from. Kueue and cert-manager always come
+// from DefaultOperatorCatalog; only Pipelines can be pointed at a catalog of
+// its own, which is how a cluster is put on a build that the released catalog
+// does not carry.
+func GetPipelinesOperatorCatalog() string {
+	return GetEnvOrDefault(PipelinesOperatorCatalogEnv, DefaultOperatorCatalog)
 }
 
 // GetKueueOperatorChannel returns the OLM channel the Kueue Operator is

@@ -34,10 +34,10 @@ spec:
         image: controller:latest
         imagePullPolicy: Always
         name: controller
-        # The operator channels and namespaces below are compiled into the
-        # image. To pin or upgrade one without rebuilding, change env: [] to
-        # env: and uncomment the desired name/value pairs below. The controller
-        # reads them on every reconcile.
+        # The operator catalogs, channels and namespaces below are compiled
+        # into the image. To pin or upgrade one without rebuilding, change
+        # env: [] to env: and uncomment the desired name/value pairs below. The
+        # controller reads them on every reconcile.
         env: []
         # - name: PIPELINES_OPERATOR_CHANNEL
         #   value: pipelines-1.24
@@ -51,6 +51,14 @@ spec:
         #   value: openshift-kueue-operator
         # - name: CERT_MANAGER_OPERATOR_NAMESPACE
         #   value: cert-manager-operator
+        # The CatalogSource the Pipelines operator is subscribed from, for
+        # running a build the released catalog does not carry. It must exist in
+        # the openshift-marketplace namespace on every cluster the addon
+        # installs the operator on, and only applies to Subscriptions the
+        # controller creates. Kueue and cert-manager always come from
+        # redhat-operators.
+        # - name: PIPELINES_OPERATOR_CATALOG
+        #   value: redhat-operators
         # Set to "true" to have the hub install the Pipelines operator when
         # nothing on it is subscribed to the package yet. Managed clusters
         # always get it.
