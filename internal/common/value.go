@@ -15,6 +15,9 @@ const (
 	// EnableClusterProfileEnv is the environment variable for enabling ClusterProfile mode
 	EnableClusterProfileEnv = "ENABLE_CLUSTERPROFILE"
 
+	// PipelinesOperatorCatalogEnv is the environment variable for the OLM
+	// CatalogSource the OpenShift Pipelines Operator is subscribed from
+	PipelinesOperatorCatalogEnv = "PIPELINES_OPERATOR_CATALOG"
 	// PipelinesOperatorChannelEnv is the environment variable for the OLM
 	// channel the OpenShift Pipelines Operator is subscribed to
 	PipelinesOperatorChannelEnv = "PIPELINES_OPERATOR_CHANNEL"
@@ -25,12 +28,22 @@ const (
 	// channel the cert-manager Operator is subscribed to
 	CertManagerOperatorChannelEnv = "CERT_MANAGER_OPERATOR_CHANNEL"
 
+	// InstallPipelinesOnHubEnv is the environment variable that opts a hub
+	// cluster into having the OpenShift Pipelines Operator installed when
+	// nothing on the cluster is subscribed to it yet
+	InstallPipelinesOnHubEnv = "INSTALL_PIPELINES_ON_HUB"
+
 	// PipelinesOperatorNamespaceEnv is the environment variable for the
 	// namespace the OpenShift Pipelines Operator is subscribed in
 	PipelinesOperatorNamespaceEnv = "PIPELINES_OPERATOR_NAMESPACE"
 	// CertManagerOperatorNamespaceEnv is the environment variable for the
 	// namespace the cert-manager Operator is subscribed in
 	CertManagerOperatorNamespaceEnv = "CERT_MANAGER_OPERATOR_NAMESPACE"
+
+	// DefaultOperatorCatalog is the OLM CatalogSource every operator is
+	// subscribed from unless something says otherwise. It is the catalog
+	// shipping the released builds of all three.
+	DefaultOperatorCatalog = "redhat-operators"
 
 	// OLM package names of the operators the addon installs. These name
 	// catalog content, not anything the addon owns, so they are fixed rather
@@ -41,12 +54,14 @@ const (
 
 	// Channels each operator is subscribed to when the matching environment
 	// variable is unset.
-	DefaultPipelinesOperatorChannel   = "pipelines-1.22"
-	DefaultKueueOperatorChannel       = "stable-v1.4"
+
+	DefaultPipelinesOperatorChannel   = "pipelines-1.24"
+	DefaultKueueOperatorChannel       = "stable-v1.5"
 	DefaultCertManagerOperatorChannel = "stable-v1"
 
 	// Namespaces each operator is subscribed in when the matching environment
 	// variable is unset.
+
 	DefaultKueueOperatorNamespace       = "openshift-kueue-operator"
 	DefaultPipelinesOperatorNamespace   = "openshift-operators"
 	DefaultCertManagerOperatorNamespace = "cert-manager-operator"
@@ -59,13 +74,22 @@ const (
 )
 
 // The operator getters below read the environment on every call rather than
-// caching it, so a channel or namespace changed on the controller Deployment
-// takes effect on the next reconcile.
+// caching it, so a catalog, channel or namespace changed on the controller
+// Deployment takes effect on the next reconcile.
 
 // GetPipelinesOperatorChannel returns the OLM channel the OpenShift Pipelines
 // Operator is subscribed to.
 func GetPipelinesOperatorChannel() string {
 	return GetEnvOrDefault(PipelinesOperatorChannelEnv, DefaultPipelinesOperatorChannel)
+}
+
+// GetPipelinesOperatorCatalog returns the OLM CatalogSource the OpenShift
+// Pipelines Operator is subscribed from. Kueue and cert-manager always come
+// from DefaultOperatorCatalog; only Pipelines can be pointed at a catalog of
+// its own, which is how a cluster is put on a build that the released catalog
+// does not carry.
+func GetPipelinesOperatorCatalog() string {
+	return GetEnvOrDefault(PipelinesOperatorCatalogEnv, DefaultOperatorCatalog)
 }
 
 // GetKueueOperatorChannel returns the OLM channel the Kueue Operator is
@@ -119,4 +143,12 @@ func IsImpersonationMode() bool {
 // IsClusterProfileEnabled returns true if ClusterProfile mode is enabled
 func IsClusterProfileEnabled() bool {
 	return os.Getenv(EnableClusterProfileEnv) == "true"
+}
+
+// IsPipelinesOnHubEnabled reports whether a hub cluster should have the
+// OpenShift Pipelines Operator installed when the package is not subscribed to
+// already. It is off unless explicitly switched on, so a hub is never
+// subscribed to the operator by surprise.
+func IsPipelinesOnHubEnabled() bool {
+	return os.Getenv(InstallPipelinesOnHubEnv) == "true"
 }

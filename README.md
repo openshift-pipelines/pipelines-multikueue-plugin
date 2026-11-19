@@ -67,7 +67,7 @@ The local cluster is skipped when its `ManagedCluster` has the label `local-clus
 - One or more registered `ManagedCluster` resources
 - The Open Cluster Management `ManifestWork` API
 - The Managed Service Account add-on and API
-- OLM access to the `redhat-operators` catalog on the hub and managed clusters
+- OLM access to the `redhat-operators` catalog on the hub and managed clusters, or to [a catalog of your own](#operator-catalogs) for OpenShift Pipelines
 - Cluster-admin access for deployment
 - Go 1.26+ for local development
 - Docker or Podman and an image registry for building and deploying a custom image
@@ -144,7 +144,7 @@ Create a `LocalQueue` pointing to `pipelines-multicluster-kueue` before submitti
 
 ## Operator upgrades
 
-Each reconcile compares the channel of every operator Subscription against the configured channel (see [Defaults](#defaults)). When the two differ, the controller moves the Subscription onto the configured channel and OLM performs the upgrade. It then waits for `status.installedCSV` to catch up with `status.currentCSV` before continuing.
+Each reconcile compares the channel of every operator Subscription against the configured channel (see [Defaults](#defaults)). When the two differ, the controller moves the Subscription onto the configured channel and OLM performs the upgrade. It then waits for `status.installedCSV` to catch up with `status.currentCSV` before continuing. The channel is the only field reconciled this way; the [catalog](#operator-catalogs) is set once, when the Subscription is created.
 
 **Only the controller's own operators are touched.** A Subscription it created carries the label `app.kubernetes.io/managed-by: pipelines-multikueue-plugin`. If an operator was already on the cluster when the controller arrived, or was installed by someone else, its channel is left alone and its lifecycle stays with whoever owns it. The controller stamps the same label on the namespaces and `OperatorGroups` it creates. This holds unconditionally — nothing below overrides it.
 
@@ -170,7 +170,7 @@ Pointing an operator at a different release is a matter of setting its channel o
 ```sh
 kubectl set env deployment/pipelines-multikueue-plugin-controller \
   -n tekton-kueue \
-  PIPELINES_OPERATOR_CHANNEL=pipelines-1.23
+  PIPELINES_OPERATOR_CHANNEL=pipelines-1.25
 ```
 
 The controller reads its environment on every reconcile, so this takes effect as soon as the new pod is running. Rolling a version number back within its series is the one thing this cannot do; that has to be done by editing the Subscription directly.
@@ -188,16 +188,49 @@ Operators installed by an earlier run of the controller already carry the owners
 
 ## Defaults
 
-Operator channels and namespaces are read from the controller's environment on every reconcile. Everything else is compiled in.
+Operator catalogs, channels and namespaces are read from the controller's environment on every reconcile. Everything else is compiled in.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
-| OpenShift Pipelines channel | `PIPELINES_OPERATOR_CHANNEL` | `pipelines-1.22` |
-| Kueue Operator channel | `KUEUE_OPERATOR_CHANNEL` | `stable-v1.4` |
+| OpenShift Pipelines catalog | `PIPELINES_OPERATOR_CATALOG` | `redhat-operators` |
+| OpenShift Pipelines channel | `PIPELINES_OPERATOR_CHANNEL` | `pipelines-1.24` |
+| Kueue Operator channel | `KUEUE_OPERATOR_CHANNEL` | `stable-v1.5` |
 | cert-manager Operator channel | `CERT_MANAGER_OPERATOR_CHANNEL` | `stable-v1` |
 | OpenShift Pipelines namespace | `PIPELINES_OPERATOR_NAMESPACE` | `openshift-operators` |
 | Kueue namespace | `KUEUE_NAMESPACE` | `openshift-kueue-operator` |
 | cert-manager namespace | `CERT_MANAGER_OPERATOR_NAMESPACE` | `cert-manager-operator` |
+| Install Pipelines on the hub | `INSTALL_PIPELINES_ON_HUB` | unset (off) |
+
+### Operator catalogs
+
+Every Subscription the controller creates points at a `CatalogSource` in the `openshift-marketplace` namespace. Kueue and cert-manager always come from `redhat-operators`. OpenShift Pipelines can be pointed at a different catalog, which is how a cluster is put on a build the released catalog does not carry:
+
+```sh
+kubectl set env deployment/pipelines-multikueue-plugin-controller \
+  -n tekton-kueue \
+  PIPELINES_OPERATOR_CATALOG=custom-pipelines-catalog
+```
+
+The catalog must exist in `openshift-marketplace` on every cluster the controller installs the operator on — the hub if `INSTALL_PIPELINES_ON_HUB` is set, and every managed cluster. A Subscription naming a catalog that is not there stays unresolved, and the controller waits on it until the reconcile times out.
+
+Two limits are worth knowing:
+
+- **The catalog is only applied when the controller creates the Subscription.** Unlike the channel, it is not reconciled afterwards. An operator already installed — by the controller or by anyone else — keeps the catalog it has. Moving an existing install to another catalog means deleting the Subscription and its CSV, or editing `spec.source` by hand.
+- **The channel still has to match the catalog.** A custom catalog that names its channels differently needs `PIPELINES_OPERATOR_CHANNEL` set alongside it.
+
+### Which operators go where
+
+The Kueue and cert-manager operators are installed on the hub and on every managed cluster.
+
+The OpenShift Pipelines operator is installed on managed clusters, which are where the PipelineRuns Kueue admits actually run. A hub is only subscribed to it when `INSTALL_PIPELINES_ON_HUB` is set to exactly `true`:
+
+```sh
+kubectl set env deployment/pipelines-multikueue-plugin-controller \
+  -n tekton-kueue \
+  INSTALL_PIPELINES_ON_HUB=true
+```
+
+The opt-in only covers installing the operator where the package is not subscribed to at all. A hub that already has OpenShift Pipelines keeps the Subscription it has, wherever it lives and whatever channel it is on, and no second one is created.
 
 | Setting | Default                                  |
 | --- |------------------------------------------|
